@@ -1,0 +1,43 @@
+[project]
+name = "mcp-backend"
+version = "0.1.0"
+description = "A MCP backend for swarm intelligence"
+requires-python = ">=3.14"
+dependencies = [
+    "fastapi>=0.135.1",
+    "uvicorn[standard]>=0.41.0",
+    "pydantic-settings>=2.8.1",
+    "python-dotenv>=1.0.1",
+    "mcp[cli]>=1.9.0",
+    "rich>=13.0.0",
+    "sse-starlette>=2.1.0",
+]
+
+[project.scripts]
+# Run the MCP server standalone
+sar-server = "mcp_server.server:main"
+# Run the FastAPI HTTP layer
+sar-api    = "api.app:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["mcp_server", "agent", "scenario", "api", "utils"]
+
+[tool.hatch.build.targets.wheel.sources]
+# Map the project root
+"" = ""
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths    = ["tests"]
+pythonpath   = ["."]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.4.1",
+    "pytest-asyncio>=1.3.0",
+    "httpx>=0.27.0",
+]
