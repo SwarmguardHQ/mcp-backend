@@ -14,7 +14,7 @@ API_HOST: str = os.getenv("API_HOST", "0.0.0.0")
 API_PORT: int = int(os.getenv("API_PORT", "8000"))
 
 # ── Grid world ────────────────────────────────────────────────────────────────
-GRID_SIZE: int = 10                 # 10 × 10 cells
+GRID_SIZE: int = 20                 # 20 x 20 cells
 BATTERY_COST_PER_CELL: float = 3.0  # % per grid unit of distance
 BATTERY_RESERVE_MIN: int = 15       # always keep this % before committing a move
 BATTERY_LOW_THRESHOLD: int = 20     # trigger return-to-charge warning
@@ -32,7 +32,7 @@ DRONE_RECOVERY_SUCCESS_RATE: float = 0.65  # 65 % chance per attempt
 # ── Charging stations ─────────────────────────────────────────────────────────
 CHARGING_STATIONS: list[dict] = [
     {"id": "CS1", "x": 0, "y": 0},
-    {"id": "CS2", "x": 9, "y": 0},
+    {"id": "CS2", "x": 19, "y": 0},
 ]
 
 # ── Supply depots ─────────────────────────────────────────────────────────────
@@ -45,7 +45,7 @@ SUPPLY_DEPOTS: list[dict] = [
     },
     {
         "id": "D2",
-        "x": 9, "y": 9,
+        "x": 19, "y": 19,
         "supplies": ["rope", "tarp", "radio"],
         "capacity": 30,
     },
@@ -68,17 +68,17 @@ SUPPLY_PRIORITY: dict[str, str] = {
 # ── Initial drone fleet ───────────────────────────────────────────────────────
 INITIAL_FLEET: list[dict] = [
     {"id": "DRONE_ALPHA",   "x": 0, "y": 0, "battery": 95},
-    {"id": "DRONE_BRAVO",   "x": 9, "y": 0, "battery": 80},
-    {"id": "DRONE_CHARLIE", "x": 0, "y": 9, "battery": 70},
-    {"id": "DRONE_DELTA",   "x": 9, "y": 9, "battery": 60},
+    {"id": "DRONE_BRAVO",   "x": 19, "y": 0, "battery": 80},
+    {"id": "DRONE_CHARLIE", "x": 0, "y": 19, "battery": 70},
+    {"id": "DRONE_DELTA",   "x": 19, "y": 19, "battery": 60},
     {"id": "DRONE_ECHO",    "x": 5, "y": 0, "battery": 0,  "offline": True},
 ]
 
 # ── Survivors (hidden from agent — discovered via scan) ───────────────────────
 INITIAL_SURVIVORS: list[dict] = [
-    {"id": "S1", "x": 3, "y": 7, "condition": "critical"},
-    {"id": "S2", "x": 8, "y": 2, "condition": "stable"},
-    {"id": "S3", "x": 5, "y": 5, "condition": "critical"},
-    {"id": "S4", "x": 1, "y": 9, "condition": "moderate"},
-    {"id": "S5", "x": 7, "y": 8, "condition": "stable"},
+    {"id": "S1", "x": 6, "y": 14, "condition": "critical"},
+    {"id": "S2", "x": 16, "y": 4, "condition": "stable"},
+    {"id": "S3", "x": 10, "y": 10, "condition": "critical"},
+    {"id": "S4", "x": 2, "y": 18, "condition": "moderate"},
+    {"id": "S5", "x": 14, "y": 16, "condition": "stable"},
 ]
