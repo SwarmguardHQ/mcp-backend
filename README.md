@@ -7,7 +7,7 @@ Edge-deployed · Offline-capable · Model Context Protocol
 
 ## What this is
 
-A simulated Search and Rescue command system for earthquake response in the ASEAN region. An AI agent (SIREN) orchestrates a fleet of rescue drones over a 10×10 grid disaster zone. The system is designed to operate **fully offline** — no cloud, no cell towers — using the [Model Context Protocol (MCP)](https://modelcontextprotocol.io) so the agent communicates with drone tools via a standardised interface rather than hard-coded function calls.
+A simulated Search and Rescue command system for earthquake response in the ASEAN region. An AI agent (SIREN) orchestrates a fleet of rescue drones over a 20×20 grid disaster zone. The system is designed to operate **fully offline** — no cloud, no cell towers — using the [Model Context Protocol (MCP)](https://modelcontextprotocol.io) so the agent communicates with drone tools via a standardised interface rather than hard-coded function calls.
 
 FastAPI sits in front as a convenient HTTP layer for triggering missions and watching live output. The MCP server itself always runs as a **stdio subprocess** — no port, no network — exactly how it would run on an edge device aboard a real drone.
 
@@ -323,7 +323,7 @@ To add a new scenario, create `scenarios/my_scenario.py` with a `MISSION_PROMPT`
 ## Grid world
 
 ```
-10×10 cells. Origin (0,0) = bottom-left corner.
+20×20 cells. Origin (0,0) = bottom-left corner.
 
 Charging stations : CS1=(0,0)   CS2=(9,0)
 Supply depots     : D1=(0,0)  → medical_kit, water, food

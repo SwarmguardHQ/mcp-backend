@@ -1,6 +1,6 @@
 """
 Scenario: Survivor Detection
-Objective: systematically scan the full 10×10 grid and detect all survivors
+Objective: systematically scan the full 20×20 grid and detect all survivors
 using thermal and acoustic tools, then build the rescue priority list.
 """
 
@@ -10,7 +10,7 @@ Survivor locations are UNKNOWN — you must find them via scanning.
 
 MISSION — Survivor Detection:
 1. Discover the active fleet.
-2. Decompose the 10×10 grid into sectors (NW, NE, SW, SE, CT).
+2. Decompose the 20×20 grid into sectors (NW, NE, SW, SE, CT).
 3. Assign one drone per sector based on battery and position.
 4. For each sector: move drone through scan waypoints (every 2 cells),
    run thermal_scan at each waypoint.

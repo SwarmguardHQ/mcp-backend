@@ -1,5 +1,5 @@
 """
-MissionPlanner — decomposes the 10×10 grid into sectors and assigns
+MissionPlanner — decomposes the 20×20 grid into sectors and assigns
 them to drones based on battery level and current position.
 
 The agent calls plan_sectors() to get a structured assignment before

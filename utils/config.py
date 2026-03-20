@@ -14,7 +14,7 @@ API_HOST: str = os.getenv("API_HOST", "0.0.0.0")
 API_PORT: int = int(os.getenv("API_PORT", "8000"))
 
 # ── Grid world ────────────────────────────────────────────────────────────────
-GRID_SIZE: int = 10                 # 10 × 10 cells
+GRID_SIZE: int = 20                 # 20 × 20 cells
 BATTERY_COST_PER_CELL: float = 3.0  # % per grid unit of distance
 BATTERY_RESERVE_MIN: int = 15       # always keep this % before committing a move
 BATTERY_LOW_THRESHOLD: int = 20     # trigger return-to-charge warning
