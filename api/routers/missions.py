@@ -40,8 +40,7 @@ async def get_status(mission_id: str):
     if not state:
         raise HTTPException(status_code=404, detail=f"Mission {mission_id!r} not found")
 
-    log   = state.reasoning_log
-    steps = len(log.entries) if log else 0
+    steps = state.step_count
 
     # Pull swarm summary if mission is complete
     summary = None
@@ -88,7 +87,7 @@ async def stream_mission(mission_id: str):
             if event["type"] in ("complete", "error"):
                 break
 
-    return EventSourceResponse(_generate())
+    return EventSourceResponse(_generate(), headers={"Cache-Control": "no-cache, no-transform"})
 
 
 @router.get("/", summary="List all missions")

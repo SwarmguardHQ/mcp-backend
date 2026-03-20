@@ -11,8 +11,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Optional
 
-from agent.command_agent import CommandAgent
-from agent.reasoning_log import ReasoningLog
+
 
 
 @dataclass
@@ -21,7 +20,7 @@ class MissionState:
     scenario:     str
     status:       str = "running"           # running | complete | failed
     log_queue:    asyncio.Queue = field(default_factory=asyncio.Queue)
-    reasoning_log: Optional[ReasoningLog]  = None
+    step_count:   int = 0
     task:         Optional[asyncio.Task]   = None
     started_at:   str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
     finished_at:  Optional[str] = None
@@ -74,104 +73,101 @@ class MissionRunner:
 
     async def _run(self, state: MissionState, prompt: str) -> None:
         try:
-            agent = _PatchedCommandAgent(prompt, state.log_queue)
-            state.reasoning_log = agent.log
-            debrief = await agent.run()
+            import sys
+            import os
+            from pathlib import Path
+            from mcp import ClientSession, StdioServerParameters
+            from mcp.client.stdio import stdio_client
+
+            # 1. Ensure the new agent logic is in sys.path
+            # The agent project root is at mcp-backend/agent or cmd-agent
+            agent_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "agent"))
+            if agent_dir not in sys.path:
+                sys.path.append(agent_dir)
+
+            from dotenv import load_dotenv
+            load_dotenv(os.path.join(agent_dir, ".env"))
+
+            from agent.graph import create_graph
+            from agent.state import SwarmState
+            from agent.mcp.client import mcp_client
+            from utils.config import INITIAL_FLEET
+
+            # 2. Setup initial state
+            agent_drones = []
+            for d in INITIAL_FLEET:
+                status = "offline" if d.get("offline") else "idle"
+                agent_drones.append({
+                    "id": d["id"], "battery": d["battery"], "x": d["x"], "y": d["y"], "status": status
+                })
+            
+            initial_state = SwarmState(
+                drones=agent_drones,
+                mission_log=[],
+                search_grid={"sector_1": False, "sector_2": True, "sector_3": False, "sector_4": True, "sector_5": False},
+                relay_active=False,
+                mission_prompt=prompt
+            )
+
+            # 3. Setup MCP connection
+            server_path = Path(__file__).parent.parent / "mcp_server" / "server.py"
+            env = os.environ.copy()
+            env["PYTHONPATH"] = str(Path(__file__).parent.parent) 
+            
+            params = StdioServerParameters(
+                command=sys.executable,
+                args=[str(server_path)],
+                env=env
+            )
+
+            async with stdio_client(params) as (read, write):
+                async with ClientSession(read, write) as session:
+                    await session.initialize()
+                    mcp_client.set_session(session)
+
+                    # 4. Run the graph
+                    app = create_graph()
+                    log_index = 0
+                    
+                    await state.log_queue.put({"type": "log", "message": "SIREN ONLINE — LangGraph swarm controller initialised."})
+
+                    async for event in app.astream(initial_state, {"recursion_limit": 50}):
+                        # Log the whole event for debugging to terminal
+                        print(f"DEBUG Mission {state.mission_id} event: {list(event.keys())}")
+                        
+                        for node_name, state_update in event.items():
+                            # LangGraph astream yields {node_name: {state_delta}}
+                            if "mission_log" in state_update:
+                                new_logs = state_update["mission_log"][log_index:]
+                                for log_msg in new_logs:
+                                    state.step_count += 1
+                                    print(f"[{node_name}] {log_msg}") # Echo to terminal
+                                    await state.log_queue.put({
+                                        "type":      "step",
+                                        "phase":     node_name,
+                                        "reasoning": log_msg,
+                                        "tool":      "graph_node",
+                                        "result_summary": "(update)"
+                                    })
+                                    # Artificial pacing for "line-by-line" feel
+                                    await asyncio.sleep(0.4) 
+                                log_index = len(state_update["mission_log"])
+                            else:
+                                # For other updates, still log the node transition
+                                await state.log_queue.put({
+                                    "type": "log",
+                                    "message": f"Graph entered node: {node_name}"
+                                })
 
             state.status      = "complete"
             state.finished_at = datetime.now(timezone.utc).isoformat()
-            await state.log_queue.put({"type": "complete", "debrief": debrief})
+            await state.log_queue.put({"type": "complete", "debrief": "Mission finished via LangGraph controller."})
 
         except Exception as exc:
             state.status      = "failed"
             state.error       = str(exc)
             state.finished_at = datetime.now(timezone.utc).isoformat()
             await state.log_queue.put({"type": "error", "message": str(exc)})
-
-
-# ── Patched agent that also writes to the SSE queue ───────────────────────────
-
-class _PatchedCommandAgent(CommandAgent):
-    """
-    Thin subclass that intercepts log entries and pushes them
-    into the SSE queue so HTTP clients see live chain-of-thought.
-    """
-
-    def __init__(self, mission_prompt: str, queue: asyncio.Queue):
-        super().__init__(mission_prompt)
-        self._queue = queue
-
-    def _record(self, phase: str, reasoning: str, tool_name: str,
-                tool_args: dict, result: dict, next_step: str) -> None:
-        self.log.add(phase, reasoning, tool_name, tool_args, result, next_step)
-        asyncio.create_task(
-            self._queue.put({
-                "type":      "step",
-                "phase":     phase,
-                "tool":      tool_name,
-                "reasoning": reasoning,
-                "result_summary": _short(result),
-            })
-        )
-
-    async def _agentic_loop(self, session) -> str:  # type: ignore[override]
-        """Override to hook into the record path."""
-        import json
-        from agent.command_agent import _extract_reasoning, _short as _s
-
-        self.messages = [{"role": "user", "content": self.mission_prompt}]
-        phase_counter = 1
-
-        await self._queue.put({"type": "log", "message": "SIREN ONLINE — Initialising swarm discovery protocol..."})
-
-        while True:
-            # TODO: LOOP IN AGENT @JACK
-            response = self.client.messages.create(
-                model=self.client.models if False else __import__("config").AGENT_MODEL,
-                max_tokens=__import__("config").AGENT_MAX_TOKENS,
-                system=__import__("agent.command_agent", fromlist=["SYSTEM_PROMPT"]).SYSTEM_PROMPT,
-                tools=self.tools,
-                messages=self.messages,
-            )
-
-            for block in response.content:
-                if hasattr(block, "text") and block.text:
-                    await self._queue.put({"type": "log", "message": block.text})
-
-            self.messages.append({"role": "assistant", "content": response.content})
-
-            if response.stop_reason == "end_turn":
-                break
-
-            tool_results = []
-            for block in response.content:
-                if block.type != "tool_use":
-                    continue
-
-                result_raw = await session.call_tool(block.name, block.input)
-                result     = json.loads(result_raw.content[0].text) if result_raw.content else {}
-
-                reasoning = _extract_reasoning(response.content)
-                self._record(
-                    phase     = f"Phase {phase_counter}: {block.name}",
-                    reasoning = reasoning,
-                    tool_name = block.name,
-                    tool_args = block.input,
-                    result    = result,
-                    next_step = "(continued)",
-                )
-                phase_counter += 1
-
-                tool_results.append({
-                    "type":        "tool_result",
-                    "tool_use_id": block.id,
-                    "content":     json.dumps(result),
-                })
-
-            if tool_results:
-                self.messages.append({"role": "user", "content": tool_results})
-
-        return self.log.render_full()
 
 
 # ── Helpers ────────────────────────────────────────────────────────────────────
