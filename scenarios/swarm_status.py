@@ -26,7 +26,7 @@ Your task:
    Survivors rescued  : X / Y
    Critical unrescued : X
    Mission complete   : Yes / No
-   RECOMMENDED ACTION : <your analysis>
+   Recommended action : <your analysis>
    ════════════════════════════════════
 
 Show chain-of-thought for each observation and recommendation.
