@@ -1,0 +1,7 @@
+{
+    "sector_1": {"type": "School", "x": 5, "y": 2},
+    "sector_2": {"type": "Hospital", "x": 8, "y": 5},
+    "sector_3": {"type": "Generic", "x": 1, "y": 1},
+    "sector_4": {"type": "Commercial", "x": 2, "y": 2},
+    "sector_5": {"type": "Residential", "x": 2, "y": 8}
+}

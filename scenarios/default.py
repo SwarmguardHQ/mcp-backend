@@ -1,6 +1,6 @@
 """
 Default Scenario
-Objective: acts as a generic fallback if no specific scenario is provided.
+Objective: acts as a generic fallback if no specific scenario is provided. Also for Swarm Dashboard if no scenario selected
 """
 
 MISSION_PROMPT = """\
