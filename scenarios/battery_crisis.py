@@ -32,3 +32,15 @@ Your task:
 This scenarios tests your ability to balance urgency vs battery safety.
 Show every trade-off explicitly in your reasoning.
 """
+
+INITIAL_FLEET = [
+    {"id": "DRONE_ALPHA",   "x": 7, "y": 8, "battery": 18},
+    {"id": "DRONE_BRAVO",   "x": 2, "y": 2, "battery": 80},
+    {"id": "DRONE_CHARLIE", "x": 5, "y": 5, "battery": 12},
+    {"id": "DRONE_DELTA",   "x": 9, "y": 9, "battery": 65},
+]
+
+INITIAL_SURVIVORS = [
+    {"id": "S1", "x": 8, "y": 7, "condition": "critical"},
+    {"id": "S3", "x": 5, "y": 5, "condition": "critical"},
+]

@@ -65,20 +65,16 @@ SUPPLY_PRIORITY: dict[str, str] = {
     "stable":   "food",
 }
 
-# ── Initial drone fleet ───────────────────────────────────────────────────────
-INITIAL_FLEET: list[dict] = [
-    {"id": "DRONE_ALPHA",   "x": 0, "y": 0, "battery": 95},
-    {"id": "DRONE_BRAVO",   "x": 9, "y": 0, "battery": 80},
-    {"id": "DRONE_CHARLIE", "x": 0, "y": 9, "battery": 70},
-    {"id": "DRONE_DELTA",   "x": 9, "y": 9, "battery": 60},
-    {"id": "DRONE_ECHO",    "x": 5, "y": 0, "battery": 0,  "offline": True},
-]
+# ── Dynamic Scenario Loading ──────────────────────────────────────────────────
+import importlib
+scenario_name = os.getenv("SCENARIO", "default")
 
-# ── Survivors (hidden from agent — discovered via scan) ───────────────────────
-INITIAL_SURVIVORS: list[dict] = [
-    {"id": "S1", "x": 3, "y": 7, "condition": "critical"},
-    {"id": "S2", "x": 8, "y": 2, "condition": "stable"},
-    {"id": "S3", "x": 5, "y": 5, "condition": "critical"},
-    {"id": "S4", "x": 1, "y": 9, "condition": "moderate"},
-    {"id": "S5", "x": 7, "y": 8, "condition": "stable"},
-]
+try:
+    scenario_module = importlib.import_module(f"scenarios.{scenario_name}")
+except ImportError:
+    print(f"Warning: Scenario '{scenario_name}' not found. Falling back to default.")
+    scenario_module = importlib.import_module("scenarios.default")
+
+INITIAL_FLEET: list[dict] = getattr(scenario_module, "INITIAL_FLEET", [])
+INITIAL_SURVIVORS: list[dict] = getattr(scenario_module, "INITIAL_SURVIVORS", [])
+MISSION_PROMPT: str = getattr(scenario_module, "MISSION_PROMPT", "")

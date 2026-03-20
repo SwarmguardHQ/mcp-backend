@@ -39,3 +39,18 @@ Your task:
 
 Produce a written assignment plan (with reasoning) before making any tool calls.
 """
+
+INITIAL_FLEET = [
+    {"id": "DRONE_ALPHA",   "x": 0, "y": 0, "battery": 90},
+    {"id": "DRONE_BRAVO",   "x": 9, "y": 0, "battery": 75},
+    {"id": "DRONE_CHARLIE", "x": 0, "y": 9, "battery": 50},
+    {"id": "DRONE_DELTA",   "x": 9, "y": 9, "battery": 0, "offline": True},
+]
+
+INITIAL_SURVIVORS = [
+    {"id": "S1", "x": 3, "y": 7, "condition": "critical"},
+    {"id": "S2", "x": 8, "y": 2, "condition": "stable"},
+    {"id": "S3", "x": 5, "y": 5, "condition": "critical"},
+    {"id": "S4", "x": 1, "y": 9, "condition": "moderate"},
+    {"id": "S5", "x": 7, "y": 8, "condition": "stable"},
+]

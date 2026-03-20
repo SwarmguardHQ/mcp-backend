@@ -30,3 +30,15 @@ Constraints:
   - Drones carry ONE item at a time.
   - Show chain-of-thought for every decision.
 """
+
+INITIAL_FLEET = [
+    {"id": "DRONE_ALPHA",   "x": 0, "y": 0, "battery": 90}, 
+    {"id": "DRONE_BRAVO",   "x": 4, "y": 9, "battery": 30}, 
+    {"id": "DRONE_CHARLIE", "x": 9, "y": 9, "battery": 70}, 
+]
+
+INITIAL_SURVIVORS = [
+    {"id": "S1", "x": 3, "y": 7, "condition": "critical"},
+    {"id": "S2", "x": 8, "y": 2, "condition": "stable"},
+    {"id": "S3", "x": 5, "y": 5, "condition": "moderate"},
+]
