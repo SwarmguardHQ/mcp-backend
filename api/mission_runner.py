@@ -146,11 +146,21 @@ class MissionRunner:
                                 for log_msg in new_logs:
                                     state.step_count += 1
                                     print(f"[{node_name}] {log_msg}") # Echo to terminal
+                                    
+                                    # Determine a friendly tool name for the UI
+                                    ui_tool = node_name
+                                    if log_msg.startswith("[INTENT] "):
+                                        ui_tool = log_msg.split("[INTENT] ")[1].split(":")[0] # Extract actual tool name e.g. move_to / thermal_scan
+                                    elif log_msg.startswith("[THOUGHT] "):
+                                        ui_tool = "thinking" # Set label to thinking
+                                    elif log_msg.startswith("[MCP] "):
+                                        ui_tool = "mcp_result"
+
                                     event_data = {
                                         "type":      "step",
                                         "phase":     node_name,
                                         "reasoning": log_msg,
-                                        "tool":      "graph_node",
+                                        "tool":      ui_tool,
                                         "result_summary": "(update)"
                                     }
                                     state.history.append(event_data)
