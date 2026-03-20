@@ -30,3 +30,13 @@ Your task:
 Show your recovery decision tree explicitly before acting.
 Explain what you would do differently if a second drone went offline.
 """
+
+INITIAL_FLEET = [
+    {"id": "DRONE_ALPHA",   "x": 0, "y": 9, "battery": 85},
+    {"id": "DRONE_BRAVO",   "x": 4, "y": 5, "battery": 60},
+    {"id": "DRONE_ECHO",    "x": 7, "y": 3, "battery": 22, "offline": True},
+]
+
+INITIAL_SURVIVORS = [
+    {"id": "S2", "x": 8, "y": 2, "condition": "stable"},
+]

@@ -26,8 +26,21 @@ Your task:
    Survivors rescued  : X / Y
    Critical unrescued : X
    Mission complete   : Yes / No
-   Recommended action : <your analysis>
+   RECOMMENDED ACTION : <your analysis>
    ════════════════════════════════════
 
 Show chain-of-thought for each observation and recommendation.
 """
+
+INITIAL_FLEET = [
+    {"id": "DRONE_ALPHA",   "x": 3, "y": 4, "battery": 80},
+    {"id": "DRONE_BRAVO",   "x": 9, "y": 1, "battery": 20},
+    {"id": "DRONE_CHARLIE", "x": 0, "y": 0, "battery": 15},
+    {"id": "DRONE_DELTA",   "x": 9, "y": 9, "battery": 0, "offline": True},
+    {"id": "DRONE_ECHO",    "x": 5, "y": 5, "battery": 100},
+]
+
+INITIAL_SURVIVORS = [
+    {"id": "S1", "x": 2, "y": 2, "condition": "critical"},
+    {"id": "S2", "x": 7, "y": 7, "condition": "stable"},
+]
