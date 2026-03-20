@@ -2,7 +2,7 @@
 name = "mcp-backend"
 version = "0.1.0"
 description = "A MCP backend for swarm intelligence"
-requires-python = ">=3.14"
+requires-python = ">=3.13"
 dependencies = [
     "fastapi>=0.135.1",
     "uvicorn[standard]>=0.41.0",
