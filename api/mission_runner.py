@@ -19,8 +19,9 @@ class MissionState:
     mission_id:   str
     scenario:     str
     status:       str = "running"           # running | complete | failed
-    log_queue:    asyncio.Queue = field(default_factory=asyncio.Queue)
-    step_count:   int = 0
+    subscribers:   list[asyncio.Queue] = field(default_factory=list) # Active SSE log listeners (allows multi-tab support)
+    history:       list[dict] = field(default_factory=list) # Persistent log history (replayed on page refresh)
+    step_count:    int = 0
     task:         Optional[asyncio.Task]   = None
     started_at:   str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
     finished_at:  Optional[str] = None
@@ -129,7 +130,10 @@ class MissionRunner:
                     app = create_graph()
                     log_index = 0
                     
-                    await state.log_queue.put({"type": "log", "message": "SIREN ONLINE — LangGraph swarm controller initialised."})
+                    initial_log = {"type": "log", "message": "SIREN ONLINE — LangGraph swarm controller initialised."}
+                    state.history.append(initial_log)
+                    for subscriber_queue in list(state.subscribers):
+                        await subscriber_queue.put(initial_log)
 
                     async for event in app.astream(initial_state, {"recursion_limit": 50}):
                         # Log the whole event for debugging to terminal
@@ -142,32 +146,44 @@ class MissionRunner:
                                 for log_msg in new_logs:
                                     state.step_count += 1
                                     print(f"[{node_name}] {log_msg}") # Echo to terminal
-                                    await state.log_queue.put({
+                                    event_data = {
                                         "type":      "step",
                                         "phase":     node_name,
                                         "reasoning": log_msg,
                                         "tool":      "graph_node",
                                         "result_summary": "(update)"
-                                    })
+                                    }
+                                    state.history.append(event_data)
+                                    for subscriber_queue in list(state.subscribers):
+                                        await subscriber_queue.put(event_data)
                                     # Artificial pacing for "line-by-line" feel
                                     await asyncio.sleep(0.4) 
                                 log_index = len(state_update["mission_log"])
                             else:
                                 # For other updates, still log the node transition
-                                await state.log_queue.put({
+                                node_log = {
                                     "type": "log",
                                     "message": f"Graph entered node: {node_name}"
-                                })
+                                }
+                                state.history.append(node_log)
+                                for subscriber_queue in list(state.subscribers):
+                                    await subscriber_queue.put(node_log)
 
             state.status      = "complete"
             state.finished_at = datetime.now(timezone.utc).isoformat()
-            await state.log_queue.put({"type": "complete", "debrief": "Mission finished via LangGraph controller."})
+            completion_log = {"type": "complete", "debrief": "Mission finished via LangGraph controller."}
+            state.history.append(completion_log)
+            for subscriber_queue in list(state.subscribers):
+                await subscriber_queue.put(completion_log)
 
         except Exception as exc:
             state.status      = "failed"
             state.error       = str(exc)
             state.finished_at = datetime.now(timezone.utc).isoformat()
-            await state.log_queue.put({"type": "error", "message": str(exc)})
+            error_log = {"type": "error", "message": str(exc)}
+            state.history.append(error_log)
+            for subscriber_queue in list(state.subscribers):
+                await subscriber_queue.put(error_log)
 
 
 # ── Helpers ────────────────────────────────────────────────────────────────────

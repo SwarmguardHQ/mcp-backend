@@ -73,19 +73,39 @@ async def stream_mission(mission_id: str):
         raise HTTPException(status_code=404, detail=f"Mission {mission_id!r} not found")
 
     async def _generate():
-        while True:
-            try:
-                event = await asyncio.wait_for(state.log_queue.get(), timeout=30.0)
-            except asyncio.TimeoutError:
-                yield {"event": "ping", "data": "{}"}
-                if state.status in ("complete", "failed"):
+        # 1. Immediate Replay of existing history
+        has_completed = False
+        for past_event in state.history:
+            yield {"event": past_event["type"], "data": json.dumps(past_event)}
+            if past_event["type"] in ("complete", "error"):
+                has_completed = True
+
+        if has_completed:
+            return
+
+        # 2. Subscribe to new updates
+        subscriber_queue = asyncio.Queue()
+        state.subscribers.append(subscriber_queue)
+        
+        try:
+            while True:
+                try:
+                    # Wait for next live event
+                    event = await asyncio.wait_for(subscriber_queue.get(), timeout=30.0)
+                except asyncio.TimeoutError:
+                    yield {"event": "ping", "data": "{}"}
+                    if state.status in ("complete", "failed"):
+                        break
+                    continue
+
+                yield {"event": event["type"], "data": json.dumps(event)}
+
+                if event["type"] in ("complete", "error"):
                     break
-                continue
-
-            yield {"event": event["type"], "data": json.dumps(event)}
-
-            if event["type"] in ("complete", "error"):
-                break
+        finally:
+            # Cleanup subscriber on disconnect
+            if subscriber_queue in state.subscribers:
+                state.subscribers.remove(subscriber_queue)
 
     return EventSourceResponse(_generate(), headers={"Cache-Control": "no-cache, no-transform"})
 
