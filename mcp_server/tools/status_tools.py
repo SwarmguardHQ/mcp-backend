@@ -55,3 +55,15 @@ def get_swarm_summary() -> dict:
         },
         "mission_complete": all(s.rescued for s in survivors),
     }
+
+
+def get_world_state() -> dict:
+    """Returns a full JSON snapshot of all drones and survivors for the dashboard."""
+    return {
+        "drones":    [d.to_dict() for d in world.drones.values()],
+        "survivors":  [s.to_dict() for s in world.survivors.values()],
+        "map":        world.render_map(),
+        "mesh_log":   world.mesh_log,
+        "grid_size":  world.grid_size,
+        "summary":    get_swarm_summary()
+    }

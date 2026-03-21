@@ -168,6 +168,15 @@ class MissionRunner:
                                         await subscriber_queue.put(event_data)
                                     # Artificial pacing for "line-by-line" feel
                                     await asyncio.sleep(0.4) 
+
+                                # Proactively update the global world state for the dashboard
+                                try:
+                                    snap_res = await session.call_tool("get_world_state", {})
+                                    if not snap_res.isError:
+                                        _sync_local_world(snap_res.content[0].text)
+                                except:
+                                    pass
+
                                 log_index = len(state_update["mission_log"])
                             else:
                                 # For other updates, still log the node transition
@@ -211,6 +220,27 @@ def _short(result: dict, max_len: int = 120) -> str:
     import json
     s = json.dumps(result, separators=(",", ":"))
     return s[:max_len] + "…" if len(s) > max_len else s
+
+
+def _sync_local_world(snapshot_text: str):
+    """Parses MCP snapshot and updates the global WorldState singleton."""
+    import json
+    from mcp_server.world_state import world as local_world
+    from mcp_server.drone_simulator import DroneStatus
+    
+    snap = json.loads(snapshot_text)
+    
+    for d_data in snap.get("drones", []):
+        if d := local_world.get_drone(d_data["drone_id"]):
+            d.x, d.y = d_data["position"]["x"], d_data["position"]["y"]
+            d.battery = d_data["battery"]
+            d.status = DroneStatus(d_data["status"])
+
+    for s_data in snap.get("survivors", []):
+        if s := local_world.get_survivor(s_data["survivor_id"]):
+            s.x, s.y, s.detected, s.rescued = s_data["position"]["x"], s_data["position"]["y"], s_data["detected"], s_data["rescued"]
+
+    local_world.mesh_log = snap.get("mesh_log", local_world.mesh_log)
 
 
 # Module-level singleton
