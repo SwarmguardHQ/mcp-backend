@@ -3,6 +3,7 @@
 Useful for debugging and live dashboards.
 
   GET /world/map          — ASCII grid map
+  GET /world/metrics      — grid exploration coverage + swarm summary
   GET /world/drones       — full fleet status
   GET /world/survivors    — all survivor states
   GET /world/mesh-log     — mesh broadcast history
@@ -13,6 +14,21 @@ from fastapi import APIRouter, HTTPException
 from mcp_server.world_state import world
 
 router = APIRouter(prefix="/world", tags=["world"])
+
+
+@router.get("/metrics")
+async def get_metrics():
+    """
+    Grid exploration coverage derived from drone positions, moves, and scan footprints.
+    """
+    from mcp_server.tools.status_tools import get_swarm_summary
+    return {
+        "grid_size": world.grid_size,
+        "explored_cells": len(world.explored_cells),
+        "total_cells": world.grid_size * world.grid_size,
+        "coverage_pct": world.exploration_coverage_pct(),
+        "summary": get_swarm_summary(),
+    }
 
 
 @router.get("/map")

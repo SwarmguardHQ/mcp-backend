@@ -28,6 +28,7 @@ def thermal_scan(drone_id: str) -> dict:
         return {"error": "Drone is offline"}
 
     drone.start_scan(SCAN_BATTERY_COST)
+    world.mark_exploration_disc(drone.x, drone.y, THERMAL_SCAN_RADIUS)
     found = []
 
     for s in world.survivors.values():
@@ -65,6 +66,7 @@ def acoustic_scan(drone_id: str) -> dict:
         return {"error": "Drone is offline"}
 
     drone.start_scan(ACOUSTIC_BATTERY_COST)
+    world.mark_exploration_disc(drone.x, drone.y, ACOUSTIC_SCAN_RADIUS)
     found = []
 
     for s in world.survivors.values():

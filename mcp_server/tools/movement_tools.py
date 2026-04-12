@@ -35,6 +35,7 @@ def move_to(drone_id: str, x: int, y: int) -> dict:
         }
 
     result = drone.move(x, y, BATTERY_COST_PER_CELL)
+    world._mark_cell(drone.x, drone.y)
     return {
         "drone_id":     drone_id,
         **result,

@@ -5,6 +5,7 @@ All tools read/write through this object instead of module-level globals.
 Note: sys.path bootstrap lives in mcp_server/__init__.py
 """
 from __future__ import annotations
+import math
 from utils.config import (
     GRID_SIZE,
     INITIAL_FLEET,
@@ -23,9 +24,11 @@ class WorldState:
         self.supply_depots = SUPPLY_DEPOTS
         self.charging_stations = CHARGING_STATIONS
         self.mesh_log: list[str] = []
+        self.explored_cells: set[tuple[int, int]] = set()
         self._reset()
 
     def _reset(self) -> None:
+        self.explored_cells = set()
         self.drones = {
             cfg["id"]: Drone(
                 drone_id=cfg["id"],
@@ -45,6 +48,26 @@ class WorldState:
             )
             for cfg in INITIAL_SURVIVORS
         }
+        for cfg in INITIAL_FLEET:
+            self._mark_cell(int(cfg["x"]), int(cfg["y"]))
+
+    def _mark_cell(self, x: int, y: int) -> None:
+        if 0 <= x < self.grid_size and 0 <= y < self.grid_size:
+            self.explored_cells.add((x, y))
+
+    def mark_exploration_disc(self, cx: int, cy: int, radius: float) -> None:
+        """Mark all integer grid cells within Euclidean distance `radius` of (cx, cy)."""
+        r = int(math.ceil(radius)) + 1
+        for dy in range(-r, r + 1):
+            for dx in range(-r, r + 1):
+                if math.hypot(dx, dy) <= radius + 1e-9:
+                    self._mark_cell(cx + dx, cy + dy)
+
+    def exploration_coverage_pct(self) -> float:
+        total = self.grid_size * self.grid_size
+        if total <= 0:
+            return 0.0
+        return round(100.0 * len(self.explored_cells) / total, 1)
 
     def get_drone(self, drone_id: str):
         return self.drones.get(drone_id)
