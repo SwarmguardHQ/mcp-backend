@@ -15,18 +15,20 @@ async def thinking_node(state: SwarmState) -> SwarmState:
     return state
 
 async def commander_node(state: SwarmState) -> SwarmState:    
-    # 1. Target Priority
+    # 1. Get Unscanned Sectors with Priority Applied
     unscanned_sectors = [sector for sector, scanned in state.get("search_grid", {}).items() if not scanned]
     # Sort unscanned sectors by their embedded priority (1 is highest)
-    unscanned_sectors.sort(key=lambda s: PRIORITY_MAP.get(s, {}).get("priority", 99))
+    unscanned_sectors.sort(key=lambda sector: PRIORITY_MAP.get(sector, {}).get("priority", 99))
     target_sector = unscanned_sectors[0] if unscanned_sectors else None
     
     # 2. Build Prompt Context
     tools_text = await mcp_client.get_available_tools()
-    
-    context = f"{SIREN_COMMANDER_PERSONA}\n\nSCENARIO BRIEFING:\n{state.get('mission_prompt', '')}\n\nCURRENT STATE:\n"
+
+    context = f"{SIREN_COMMANDER_PERSONA}\n\n"
+    context += f"SCENARIO BRIEFING:\n{state.get('mission_prompt', '')}\n\n"
+    context += f"CURRENT STATE:\n"
     context += f"Drones: {state['drones']}\n"
-    context += f"Relay Active: {state['relay_active']}\n"
+    context += f"Active Relays: {state.get('active_relays', {})}\n"
     
     if state.get("mission_log"):
         context += "\nRECENT ACTION MEMORY (Do not repeat the exact same tool calls if they just succeeded):\n"
@@ -44,11 +46,11 @@ async def commander_node(state: SwarmState) -> SwarmState:
     else:
         context += "TARGET PRIORITY: All sectors scanned. Await further instructions.\n"
     
-    # 3. Call LLM
+    # 3. Call LLM (With structured output)
     llm = ChatGoogleGenerativeAI(model="gemini-3.1-flash-lite-preview", temperature=0)
     structured_llm = llm.with_structured_output(AgentOutput)
 
-    # Re-apply pacing to prevent 429 Too Many Requests hanging the terminal!
+    # Re-apply pacing to prevent 429 Too Many Requests hanging the terminal
     await asyncio.sleep(4.5)
     
     response = await structured_llm.ainvoke(context)
@@ -91,19 +93,23 @@ async def tool_execution_node(state: SwarmState) -> SwarmState:
                 
                 # 2. Relay Rule Override
                 distance = get_distance(drone["x"], drone["y"], params.get("x", 0), params.get("y", 0))
-                if distance > 5 and not state["relay_active"]:
+                
+                if "active_relays" not in state:
+                    state["active_relays"] = {}
+                    
+                if distance > 5 and drone_id not in state["active_relays"]:
                     mid_x = int((drone["x"] + params.get("x", 0)) / 2)
                     mid_y = int((drone["y"] + params.get("y", 0)) / 2)
-                    state["mission_log"].append(f"[SYSTEM] RELAY RULE: Target > 5cells. Deploying relay drone at midpoint ({mid_x}, {mid_y}).")
+                    state["mission_log"].append(f"[SYSTEM] RELAY RULE: Target > 5 cells. Deploying relay drone at midpoint ({mid_x}, {mid_y}).")
                     
-                    relay_drone = next((drone for drone in state["drones"] if drone["id"] != drone_id), None)
+                    relay_drone = next((drone for drone in state["drones"] if drone["id"] != drone_id and drone.get("status") == "idle"), None)
                     if relay_drone:
                         try:
                             res = await mcp_client.session.call_tool("move_to", {"drone_id": relay_drone["id"], "x": mid_x, "y": mid_y})
                             state["mission_log"].append(f"[MCP] {res.content[0].text}")
                             relay_drone["x"] = mid_x
                             relay_drone["y"] = mid_y
-                            state["relay_active"] = True
+                            state["active_relays"][drone_id] = relay_drone["id"]
                         except Exception as e:
                             state["mission_log"].append(f"[MCP ERROR] {str(e)}")
                             
@@ -144,7 +150,7 @@ async def tool_execution_node(state: SwarmState) -> SwarmState:
             if drone and not ("new_position" in res_text or "position" in res_text):
                 drone["x"] = params.get("x", 0)
                 drone["y"] = params.get("y", 0)
-        elif tool_name == "thermal_scan":
+        elif tool_name in ["thermal_scan", "acoustic_scan"]:
             drone = next((drone for drone in state["drones"] if drone["id"] == params.get("drone_id")), None)
             matched = False
             if drone:
