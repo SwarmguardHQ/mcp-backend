@@ -58,24 +58,19 @@ async def commander_node(state: SwarmState) -> SwarmState:
     # 4. Update Mission Log
     state["mission_log"].append(f"[THOUGHT] {response.thought}")
     state["mission_log"].append(f"[INTENT] {response.tool_call.name}: {response.tool_call.parameters}")
+    state["next_action"] = response.tool_call
     
     return state
 
 
 async def tool_execution_node(state: SwarmState) -> SwarmState:
     try:
-        # At this node should have "mission_log" and ["INTENT"] should be the last log
-        if not state["mission_log"]:
+        if not state.get("next_action"):
             return state
             
-        last_intent = state["mission_log"][-1]
-        if not last_intent.startswith("[INTENT]"):
-            return state
-            
-        # Parse intent
-        intent_str = last_intent.replace("[INTENT] ", "")
-        tool_name, params_str = intent_str.split(": ", 1) # e.g. [INTENT] move_drone: {'drone_id': 'D1', 'x': 1500, 'y': 2000}
-        params = ast.literal_eval(params_str) # Safe passing args into params using Abstract Syntax Tree
+        # Securely grab intent directly from the state object
+        tool_name = state["next_action"].name
+        params = state["next_action"].parameters
         
         # Action routing
         if tool_name == "move_to":
@@ -198,16 +193,8 @@ async def recovery_node(state: SwarmState) -> SwarmState:
     
     # Extract errored drone if possible
     drone_id = "DRONE_ALPHA"
-    for log in reversed(state["mission_log"]):
-        if log.startswith("[INTENT]"):
-            try:
-                params_str = log.split(": ", 1)[1]
-                params = ast.literal_eval(params_str)
-                if isinstance(params, dict) and "drone_id" in params:
-                    drone_id = params["drone_id"]
-                    break
-            except (ValueError, SyntaxError):
-                continue
+    if state.get("next_action") and "drone_id" in state["next_action"].parameters:
+        drone_id = state["next_action"].parameters["drone_id"]
                 
     res = await mcp_client.session.call_tool("attempt_drone_recovery", {"drone_id": drone_id})
     state["mission_log"].append(f"[RECOVERY] {res.content[0].text}")
