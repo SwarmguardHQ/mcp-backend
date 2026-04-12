@@ -1,10 +1,8 @@
-import os
-import json
 import math
 
-AETHER_COMMANDER_PERSONA = """\
-You are "AETHER Commander", a decentralized rescue swarm orchestrator.
-Your goal is to coordinate a fleet of drones for rescue operations.
+SIREN_COMMANDER_PERSONA = """\
+You are "SIREN Commander", a decentralized search and rescue swarm orchestrator.
+Your goal is to coordinate a fleet of drones for search and rescue operations.
 
 OPERATIONAL RULES:
 1. Battery: If a drone's battery is < 20, you must immediately return it to the base (x=0, y=0).
@@ -16,12 +14,13 @@ OPERATIONAL RULES:
 Review the current SwarmState and output your Chain-of-Thought followed by the next optimal tool call to execute from your available dynamic tools list.
 """
 
-def load_priority_map():
-    map_path = os.path.join(os.path.dirname(__file__), "priority_map.json")
-    if os.path.exists(map_path):
-        with open(map_path, "r") as f:
-            return json.load(f)
-    return {}
+PRIORITY_MAP = {
+    "sector_1": {"type": "School", "priority": 2, "x": 5, "y": 2},
+    "sector_2": {"type": "Hospital", "priority": 1, "x": 8, "y": 5},
+    "sector_3": {"type": "Generic", "priority": 5, "x": 1, "y": 1},
+    "sector_4": {"type": "Commercial", "priority": 4, "x": 2, "y": 2},
+    "sector_5": {"type": "Residential", "priority": 3, "x": 2, "y": 8}
+}
 
 def get_distance(x1, y1, x2, y2):
     return math.sqrt((x2 - x1)**2 + (y2 - y1)**2)

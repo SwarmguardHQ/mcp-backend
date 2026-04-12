@@ -7,28 +7,24 @@ from langgraph.graph import END
 
 from .state import SwarmState, AgentOutput
 from .mcp.client import mcp_client
-from .utils import load_priority_map, get_distance, AETHER_COMMANDER_PERSONA
+from .utils import get_distance, SIREN_COMMANDER_PERSONA, PRIORITY_MAP
 
 async def thinking_node(state: SwarmState) -> SwarmState:
     """Provides intermediate feedback for better streaming."""
     state["mission_log"].append("[LOG] SIREN commander is assessing telemetry...")
     return state
 
-async def commander_node(state: SwarmState) -> SwarmState:
-    priority_map = load_priority_map()
-    
+async def commander_node(state: SwarmState) -> SwarmState:    
     # 1. Target Priority
     unscanned_sectors = [sector for sector, scanned in state.get("search_grid", {}).items() if not scanned]
-    priority_order = {"Hospital": 1, "School": 2, "Residential": 3, "Commercial": 4, "Generic": 5}
-    
-    # Sort unscanned sectors by highest priority mapping
-    unscanned_sectors.sort(key=lambda s: priority_order.get(priority_map.get(s, {}).get("type", "Generic"), 99))
+    # Sort unscanned sectors by their embedded priority (1 is highest)
+    unscanned_sectors.sort(key=lambda s: PRIORITY_MAP.get(s, {}).get("priority", 99))
     target_sector = unscanned_sectors[0] if unscanned_sectors else None
     
     # 2. Build Prompt Context
     tools_text = await mcp_client.get_available_tools()
     
-    context = f"{AETHER_COMMANDER_PERSONA}\n\nSCENARIO BRIEFING:\n{state.get('mission_prompt', '')}\n\nCURRENT STATE:\n"
+    context = f"{SIREN_COMMANDER_PERSONA}\n\nSCENARIO BRIEFING:\n{state.get('mission_prompt', '')}\n\nCURRENT STATE:\n"
     context += f"Drones: {state['drones']}\n"
     context += f"Relay Active: {state['relay_active']}\n"
     
@@ -40,7 +36,7 @@ async def commander_node(state: SwarmState) -> SwarmState:
     context += "You must format your tool_call strictly using the exact 'name' and matching 'parameters' keys specified in the schemas above.\n\n"
     
     if target_sector:
-        data = priority_map.get(target_sector, {})
+        data = PRIORITY_MAP.get(target_sector, {})
         zone_type = data.get("type", "Generic")
         target_x = data.get("x", 0)
         target_y = data.get("y", 0)
@@ -152,8 +148,7 @@ async def tool_execution_node(state: SwarmState) -> SwarmState:
             drone = next((drone for drone in state["drones"] if drone["id"] == params.get("drone_id")), None)
             matched = False
             if drone:
-                priority_map = load_priority_map()
-                for section, data in priority_map.items():
+                for section, data in PRIORITY_MAP.items():
                     # Check if drone coordinates match the sector grid and it's unscanned
                     if data.get("x") == drone["x"] and data.get("y") == drone["y"] and not state.get("search_grid", {}).get(section, True):
                         state["search_grid"][section] = True
