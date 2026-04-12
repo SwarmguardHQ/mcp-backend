@@ -1,7 +1,7 @@
 from typing import Optional
 from mcp import ClientSession
 
-class AetherMCPClient:
+class SirenMCPClient:
     """Dynamic Async MCP Client connected to mcp-backend."""
     def __init__(self):
         self.session: Optional[ClientSession] = None
@@ -22,4 +22,4 @@ class AetherMCPClient:
             tools_str += f"- {tool.name}: {tool.description}\n  Schema: {tool.inputSchema}\n"
         return tools_str
 
-mcp_client = AetherMCPClient()
+mcp_client = SirenMCPClient()
