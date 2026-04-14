@@ -53,7 +53,13 @@ async def commander_node(state: SwarmState) -> SwarmState:
     # Re-apply pacing to prevent 429 Too Many Requests hanging the terminal
     await asyncio.sleep(4.5)
     
-    response = await structured_llm.ainvoke(context)
+    try:
+        response = await structured_llm.ainvoke(context)
+    except Exception as e:
+        # This will show the exact error (e.g. 404 Model Not Found or Auth Error) in your terminal
+        print(f"❌ LLM ERROR: {str(e)}")
+        state["mission_log"].append(f"[ERROR] LLM call failed: {str(e)}")
+        raise e
     
     # 4. Update Mission Log
     state["mission_log"].append(f"[THOUGHT] {response.thought}")
