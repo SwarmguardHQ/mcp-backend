@@ -12,8 +12,6 @@ from datetime import datetime, timezone
 from typing import Optional
 
 
-
-
 @dataclass
 class MissionState:
     mission_id:   str
@@ -81,7 +79,7 @@ class MissionRunner:
             from mcp.client.stdio import stdio_client
 
             # 1. Ensure the new agent logic is in sys.path
-            # The agent project root is at mcp-backend/agent or cmd-agent
+            # The agent project root is at mcp-backend/agent
             agent_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "agent"))
             if agent_dir not in sys.path:
                 sys.path.append(agent_dir)
@@ -96,17 +94,18 @@ class MissionRunner:
 
             # 2. Setup initial state
             agent_drones = []
-            for d in INITIAL_FLEET:
-                status = "offline" if d.get("offline") else "idle"
+            for drone in INITIAL_FLEET:
+                status = "offline" if drone.get("offline") else "idle"
                 agent_drones.append({
-                    "id": d["id"], "battery": d["battery"], "x": d["x"], "y": d["y"], "status": status
+                    "id": drone["id"], "battery": drone["battery"], "x": drone["x"], "y": drone["y"], "status": status
                 })
             
             initial_state = SwarmState(
                 drones=agent_drones,
                 mission_log=[],
                 search_grid={"sector_1": False, "sector_2": True, "sector_3": False, "sector_4": True, "sector_5": False},
-                relay_active=False,
+                active_relays={},
+                next_action=None,
                 mission_prompt=prompt
             )
 
@@ -127,6 +126,7 @@ class MissionRunner:
                     mcp_client.set_session(session)
 
                     # 4. Run the graph
+                    print(f"\n🚀 MISSION {state.mission_id} STARTED — Running LangGraph swarm controller...")
                     app = create_graph()
                     log_index = 0
                     
@@ -145,7 +145,7 @@ class MissionRunner:
                                 new_logs = state_update["mission_log"][log_index:]
                                 for log_msg in new_logs:
                                     state.step_count += 1
-                                    print(f"[{node_name}] {log_msg}") # Echo to terminal
+                                    print(f"  🤖 AGENT [{node_name}]: {log_msg}") # Echo to terminal
                                     
                                     # Determine a friendly tool name for the UI
                                     ui_tool = node_name
@@ -191,6 +191,8 @@ class MissionRunner:
             state.status      = "complete"
             state.finished_at = datetime.now(timezone.utc).isoformat()
             completion_log = {"type": "complete", "debrief": "Mission finished via LangGraph controller."}
+            print(f"🏁 MISSION {state.mission_id} {completion_log['debrief']}\n")
+            
             state.history.append(completion_log)
             for subscriber_queue in list(state.subscribers):
                 await subscriber_queue.put(completion_log)
