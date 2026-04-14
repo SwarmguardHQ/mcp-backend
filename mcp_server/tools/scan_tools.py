@@ -45,6 +45,9 @@ def thermal_scan(drone_id: str) -> dict:
         coords = ", ".join(f"{f['survivor_id']}@({f['position']['x']},{f['position']['y']})" for f in found)
         broadcast_mesh_message(drone_id, f"THERMAL DETECT: {coords}")
 
+    from mcp_server.mesa_bridge import notify_drone_changed
+
+    notify_drone_changed(drone_id)
     return {
         "drone_id":           drone_id,
         "scan_position":      {"x": drone.x, "y": drone.y},
@@ -83,6 +86,9 @@ def acoustic_scan(drone_id: str) -> dict:
         coords = ", ".join(f"{f['survivor_id']}@({f['position']['x']},{f['position']['y']})" for f in found)
         broadcast_mesh_message(drone_id, f"ACOUSTIC DETECT: {coords}")
 
+    from mcp_server.mesa_bridge import notify_drone_changed
+
+    notify_drone_changed(drone_id)
     return {
         "drone_id":           drone_id,
         "scan_position":      {"x": drone.x, "y": drone.y},

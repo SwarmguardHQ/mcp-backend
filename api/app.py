@@ -20,7 +20,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 import scenarios as _scenarios_pkg
-from api.routers import missions, world, tools, scenarios as scenarios_router
+from api.routers import missions, world, tools, scenarios as scenarios_router, mesa as mesa_router
 from utils.config import INITIAL_FLEET
 
 
@@ -63,6 +63,7 @@ def create_app() -> FastAPI:
     app.include_router(world.router)
     app.include_router(tools.router)
     app.include_router(scenarios_router.router)
+    app.include_router(mesa_router.router, prefix="/world")
 
     @app.get("/health", tags=["health"])
     async def health():

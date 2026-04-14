@@ -51,6 +51,9 @@ def return_to_charging_station(drone_id: str) -> dict:
 
     if drone.battery < cost:
         drone.go_offline(reason="Battery depleted before reaching charging station")
+        from mcp_server.mesa_bridge import notify_drone_changed
+
+        notify_drone_changed(drone_id)
         return {
             "error":   "Drone ran out of battery before reaching station",
             "status":  "offline",
@@ -61,6 +64,9 @@ def return_to_charging_station(drone_id: str) -> dict:
     drone.battery -= cost
     drone.x, drone.y = station["x"], station["y"]
     drone.start_charging(station["id"])
+    from mcp_server.mesa_bridge import notify_drone_changed
+
+    notify_drone_changed(drone_id)
 
     return {
         "drone_id":           drone_id,
@@ -87,6 +93,9 @@ def charge_drone(drone_id: str, charge_percent: int = 100) -> dict:
         }
 
     drone.finish_charging(min(100, max(1, charge_percent)))
+    from mcp_server.mesa_bridge import notify_drone_changed
+
+    notify_drone_changed(drone_id)
     return {
         "drone_id": drone_id,
         "battery":  drone.battery,

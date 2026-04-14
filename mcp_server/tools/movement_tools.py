@@ -36,6 +36,9 @@ def move_to(drone_id: str, x: int, y: int) -> dict:
 
     result = drone.move(x, y, BATTERY_COST_PER_CELL)
     world._mark_cell(drone.x, drone.y)
+    from mcp_server.mesa_bridge import notify_drone_changed
+
+    notify_drone_changed(drone_id)
     return {
         "drone_id":     drone_id,
         **result,

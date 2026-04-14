@@ -52,6 +52,9 @@ def attempt_drone_recovery(drone_id: str) -> dict:
             "COMMAND",
             f"{drone_id} recovered at ({drone.x},{drone.y}) bat={recovered_battery}%",
         )
+        from mcp_server.mesa_bridge import notify_drone_changed
+
+        notify_drone_changed(drone_id)
         return {
             "drone_id":  drone_id,
             "recovered": True,

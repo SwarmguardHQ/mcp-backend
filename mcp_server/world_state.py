@@ -50,6 +50,9 @@ class WorldState:
         }
         for cfg in INITIAL_FLEET:
             self._mark_cell(int(cfg["x"]), int(cfg["y"]))
+        from mcp_server import mesa_bridge
+
+        mesa_bridge.rebuild_mesa_after_world_reset()
 
     def _mark_cell(self, x: int, y: int) -> None:
         if 0 <= x < self.grid_size and 0 <= y < self.grid_size:

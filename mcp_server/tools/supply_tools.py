@@ -44,6 +44,9 @@ def collect_supplies(drone_id: str, supply_type: str) -> dict:
         }
 
     drone.pick_up(supply_type)
+    from mcp_server.mesa_bridge import notify_drone_changed
+
+    notify_drone_changed(drone_id)
     return {
         "drone_id":   drone_id,
         "collected":  supply_type,
@@ -82,6 +85,9 @@ def deliver_supplies(drone_id: str, survivor_id: str) -> dict:
 
     delivered = drone.drop_off()
     survivor.supplies_received.append(delivered)
+    from mcp_server.mesa_bridge import notify_drone_changed
+
+    notify_drone_changed(drone_id)
 
     return {
         "drone_id":    drone_id,

@@ -13,7 +13,7 @@ INITIAL_FLEET = [
     {"id": "DRONE_BRAVO",   "x": 9, "y": 0, "battery": 80},
     {"id": "DRONE_CHARLIE", "x": 0, "y": 9, "battery": 70},
     {"id": "DRONE_DELTA",   "x": 9, "y": 9, "battery": 60},
-    {"id": "DRONE_ECHO",    "x": 5, "y": 0, "battery": 100},
+    {"id": "DRONE_ECHO",    "x": 5, "y": 0, "battery": 100, "offline": True},
 ]
 
 INITIAL_SURVIVORS = [

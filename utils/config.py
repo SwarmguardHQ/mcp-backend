@@ -78,3 +78,10 @@ except ImportError:
 INITIAL_FLEET: list[dict] = getattr(scenario_module, "INITIAL_FLEET", [])
 INITIAL_SURVIVORS: list[dict] = getattr(scenario_module, "INITIAL_SURVIVORS", [])
 MISSION_PROMPT: str = getattr(scenario_module, "MISSION_PROMPT", "")
+
+# ── Mesa / drone-sim bridge (optional; install mcp-backend[mesa]) ───────────
+USE_MESA_SIM: bool = os.getenv("USE_MESA_SIM", "").lower() in ("1", "true", "yes")
+# When > 0, each GET on /world/drones|map|metrics advances Mesa this many steps then pulls state.
+MESA_STEPS_ON_SYNC: int = int(os.getenv("MESA_STEPS_ON_SYNC", "0"))
+# Extra Mesa steps applied only on each ``GET /world/stream`` tick (live clock), then full pull sync.
+MESA_STEPS_PER_STREAM_TICK: int = int(os.getenv("MESA_STEPS_PER_STREAM_TICK", "0"))

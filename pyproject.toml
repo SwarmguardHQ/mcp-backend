@@ -2,7 +2,7 @@
 name = "mcp-backend"
 version = "0.1.0"
 description = "A MCP backend for swarm intelligence"
-requires-python = ">=3.14"
+requires-python = ">=3.12"
 dependencies = [
     "fastapi>=0.135.1",
     "uvicorn[standard]>=0.41.0",
@@ -13,6 +13,14 @@ dependencies = [
     "sse-starlette>=2.1.0",
     "langgraph>=0.2.14",
     "langchain-google-genai>=2.0.0",
+]
+
+[project.optional-dependencies]
+# Sibling `drone-sim/` Mesa model + `/world/mesa/*` HTTP routes
+mesa = [
+    "mesa>=3.0.3",
+    "numpy>=1.26.0",
+    "scipy>=1.13.0",
 ]
 
 [project.scripts]

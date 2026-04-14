@@ -68,7 +68,7 @@ def test_move_to_success(fresh_world):
 
 def test_move_to_outside_grid(fresh_world):
     from mcp_server.tools.movement_tools import move_to
-    result = move_to("DRONE_ALPHA", 15, 0)
+    result = move_to("DRONE_ALPHA", 25, 0)
     assert "error" in result
 
 
