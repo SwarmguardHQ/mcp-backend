@@ -6,11 +6,20 @@ and streams log lines into an asyncio.Queue that SSE clients consume.
 from __future__ import annotations
 import asyncio
 import importlib
+import json
+import os
+import sys
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Optional
 
+from mcp import ClientSession, StdioServerParameters
+from mcp.client.stdio import stdio_client
+
+
+# ── Data model ─────────────────────────────────────────────────────────────────
 
 @dataclass
 class MissionState:
@@ -72,14 +81,7 @@ class MissionRunner:
 
     async def _run(self, state: MissionState, prompt: str) -> None:
         try:
-            import sys
-            import os
-            from pathlib import Path
-            from mcp import ClientSession, StdioServerParameters
-            from mcp.client.stdio import stdio_client
-
-            # 1. Ensure the new agent logic is in sys.path
-            # The agent project root is at mcp-backend/agent
+            # Ensure agent package is importable
             agent_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "agent"))
             if agent_dir not in sys.path:
                 sys.path.append(agent_dir)
@@ -92,32 +94,40 @@ class MissionRunner:
             from agent.mcp.client import mcp_client
             from utils.config import INITIAL_FLEET
 
-            # 2. Setup initial state
-            agent_drones = []
-            for drone in INITIAL_FLEET:
-                status = "offline" if drone.get("offline") else "idle"
-                agent_drones.append({
-                    "id": drone["id"], "battery": drone["battery"], "x": drone["x"], "y": drone["y"], "status": status
-                })
-            
+            # ── 1. Build initial SwarmState ─────────────────────────────────────
+            agent_drones = [
+                {
+                    "id":      drone["id"],
+                    "battery": drone["battery"],
+                    "x":       drone["x"],
+                    "y":       drone["y"],
+                    "status":  "offline" if drone.get("offline") else "idle",
+                }
+                for drone in INITIAL_FLEET
+            ]
             initial_state = SwarmState(
                 drones=agent_drones,
                 mission_log=[],
-                search_grid={"sector_1": False, "sector_2": True, "sector_3": False, "sector_4": True, "sector_5": False},
+                search_grid={
+                    "sector_1": False,
+                    "sector_2": True,
+                    "sector_3": False,
+                    "sector_4": True,
+                    "sector_5": False,
+                },
                 active_relays={},
                 next_action=None,
-                mission_prompt=prompt
+                mission_prompt=prompt,
             )
 
-            # 3. Setup MCP connection
+            # ── 2. Start the MCP server side-car ────────────────────────────────
             server_path = Path(__file__).parent.parent / "mcp_server" / "server.py"
             env = os.environ.copy()
-            env["PYTHONPATH"] = str(Path(__file__).parent.parent) 
-            
+            env["PYTHONPATH"] = str(Path(__file__).parent.parent)
             params = StdioServerParameters(
                 command=sys.executable,
                 args=[str(server_path)],
-                env=env
+                env=env,
             )
 
             async with stdio_client(params) as (read, write):
@@ -125,89 +135,80 @@ class MissionRunner:
                     await session.initialize()
                     mcp_client.set_session(session)
 
-                    # 4. Run the graph
+                    # ── 3. Run the LangGraph agent ──────────────────────────────
                     print(f"\n🚀 MISSION {state.mission_id} STARTED — Running LangGraph swarm controller...")
                     app = create_graph()
                     log_index = 0
-                    
-                    initial_log = {"type": "log", "message": "SIREN ONLINE — LangGraph swarm controller initialised."}
-                    state.history.append(initial_log)
-                    for subscriber_queue in list(state.subscribers):
-                        await subscriber_queue.put(initial_log)
+
+                    await _broadcast(state, {"type": "log", "message": "SIREN ONLINE — LangGraph swarm controller initialised."})
 
                     async for event in app.astream(initial_state, {"recursion_limit": 50}):
-                        # Log the whole event for debugging to terminal
-                        print(f"DEBUG Mission {state.mission_id} event: {list(event.keys())}")
-                        
                         for node_name, state_update in event.items():
-                            # LangGraph astream yields {node_name: {state_delta}}
-                            if "mission_log" in state_update:
-                                new_logs = state_update["mission_log"][log_index:]
-                                for log_msg in new_logs:
-                                    state.step_count += 1
-                                    print(f"  🤖 AGENT [{node_name}]: {log_msg}") # Echo to terminal
-                                    
-                                    # Determine a friendly tool name for the UI
-                                    ui_tool = node_name
-                                    if log_msg.startswith("[INTENT] "):
-                                        ui_tool = log_msg.split("[INTENT] ")[1].split(":")[0] # Extract actual tool name e.g. move_to / thermal_scan
-                                    elif log_msg.startswith("[THOUGHT] "):
-                                        ui_tool = "thinking" # Set label to thinking
-                                    elif log_msg.startswith("[MCP] "):
-                                        ui_tool = "mcp_result"
 
-                                    event_data = {
-                                        "type":      "step",
-                                        "phase":     node_name,
-                                        "reasoning": log_msg,
-                                        "tool":      ui_tool,
-                                        "result_summary": "(update)"
-                                    }
-                                    state.history.append(event_data)
-                                    for subscriber_queue in list(state.subscribers):
-                                        await subscriber_queue.put(event_data)
-                                    # Artificial pacing for "line-by-line" feel
-                                    await asyncio.sleep(0.4) 
+                            if "mission_log" not in state_update:
+                                # Node transition with no new log entries — emit a lightweight notice
+                                await _broadcast(state, {"type": "log", "message": f"Graph entered node: {node_name}"})
+                                continue
 
-                                # Proactively update the global world state for the dashboard
-                                try:
-                                    snap_res = await session.call_tool("get_world_state", {})
-                                    if not snap_res.isError:
-                                        _sync_local_world(snap_res.content[0].text)
-                                except:
-                                    pass
+                            # Emit each new log entry as a SSE step event
+                            new_logs = state_update["mission_log"][log_index:]
+                            for log_msg in new_logs:
+                                state.step_count += 1
+                                print(f"  🤖 AGENT [{node_name}]: {log_msg}")
 
-                                log_index = len(state_update["mission_log"])
-                            else:
-                                # For other updates, still log the node transition
-                                node_log = {
-                                    "type": "log",
-                                    "message": f"Graph entered node: {node_name}"
-                                }
-                                state.history.append(node_log)
-                                for subscriber_queue in list(state.subscribers):
-                                    await subscriber_queue.put(node_log)
+                                ui_tool = _classify_tool(log_msg, node_name)
+                                await _broadcast(state, {
+                                    "type":           "step",
+                                    "phase":          node_name,
+                                    "reasoning":      log_msg,
+                                    "tool":           ui_tool,
+                                    "result_summary": "(update)",
+                                })
+                                await asyncio.sleep(0.4)  # Pacing for live-feed feel
 
-            state.status      = "complete"
+                            # Sync world state to the dashboard after each agent step
+                            try:
+                                snap = await session.call_tool("get_world_state", {})
+                                if not snap.isError:
+                                    _sync_local_world(snap.content[0].text)
+                            except Exception:
+                                pass
+
+                            log_index = len(state_update["mission_log"])
+
+            # ── 4. Mission complete ─────────────────────────────────────────────
+            state.status = "complete"
             state.finished_at = datetime.now(timezone.utc).isoformat()
-            completion_log = {"type": "complete", "debrief": "Mission finished via LangGraph controller."}
-            print(f"🏁 MISSION {state.mission_id} {completion_log['debrief']}\n")
-            
-            state.history.append(completion_log)
-            for subscriber_queue in list(state.subscribers):
-                await subscriber_queue.put(completion_log)
+            print(f"🏁 MISSION {state.mission_id} FINISHED\n")
+            await _broadcast(state, {"type": "complete", "debrief": "Mission finished via LangGraph controller."})
 
         except Exception as exc:
             state.status = "failed"
             state.error = str(exc)
             state.finished_at = datetime.now(timezone.utc).isoformat()
-            error_log = {"type": "error", "message": str(exc)}
-            state.history.append(error_log)
-            for subscriber_queue in list(state.subscribers):
-                await subscriber_queue.put(error_log)
+            print(f"💥 MISSION {state.mission_id} FAILED: {exc}")
+            await _broadcast(state, {"type": "error", "message": str(exc)})
 
 
-# ── Helpers ────────────────────────────────────────────────────────────────────
+# ── Helpers ─────────────────────────────────────────────────────────────────────
+
+async def _broadcast(state: MissionState, event: dict) -> None:
+    """Append an event to the persistent history and push it to all active SSE subscribers."""
+    state.history.append(event)
+    for q in list(state.subscribers):
+        await q.put(event)
+
+
+def _classify_tool(log_msg: str, node_name: str) -> str:
+    """Derive a friendly UI tool label from the agent log message prefix."""
+    if log_msg.startswith("[INTENT] "):
+        return log_msg.split("[INTENT] ")[1].split(":")[0]
+    if log_msg.startswith("[THOUGHT] "):
+        return "thinking"
+    if log_msg.startswith("[MCP] "):
+        return "mcp_result"
+    return node_name
+
 
 def _load_prompt(scenario: str) -> str:
     """Load MISSION_PROMPT from the scenarios package without hardcoding names."""
@@ -229,9 +230,9 @@ def _sync_local_world(snapshot_text: str):
     import json
     from mcp_server.world_state import world as local_world
     from mcp_server.drone_simulator import DroneStatus
-    
+
     snap = json.loads(snapshot_text)
-    
+
     for d_data in snap.get("drones", []):
         if d := local_world.get_drone(d_data["drone_id"]):
             d.x, d.y = d_data["position"]["x"], d_data["position"]["y"]
