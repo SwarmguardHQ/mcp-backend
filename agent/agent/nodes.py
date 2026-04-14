@@ -78,23 +78,26 @@ async def tool_execution_node(state: SwarmState) -> SwarmState:
             target_x = params.get("x", 0)
             target_y = params.get("y", 0)
             
+            # Check if drone exists
             drone = next((drone for drone in state["drones"] if drone["id"] == drone_id), None)
             
             if drone:
                 # 1. Battery Rule Override
                 if drone["battery"] < 20:
                     state["mission_log"].append(f"[SYSTEM] BATTERY RULE: {drone_id} battery < 20. Returning to base.")
-                    params["x"], params["y"] = mcp_client.base_x, mcp_client.base_y
+                    target_x, target_y = mcp_client.base_x, mcp_client.base_y
+                    # Update the params to reflect the new target
+                    params["x"], params["y"] = target_x, target_y
                 
                 # 2. Relay Rule Override
-                distance = get_distance(drone["x"], drone["y"], params.get("x", 0), params.get("y", 0))
+                distance = get_distance(drone["x"], drone["y"], target_x, target_y)
                 
                 if "active_relays" not in state:
                     state["active_relays"] = {}
-                    
+                
                 if distance > 5 and drone_id not in state["active_relays"]:
-                    mid_x = int((drone["x"] + params.get("x", 0)) / 2)
-                    mid_y = int((drone["y"] + params.get("y", 0)) / 2)
+                    mid_x = int((drone["x"] + target_x) / 2)
+                    mid_y = int((drone["y"] + target_y) / 2)
                     state["mission_log"].append(f"[SYSTEM] RELAY RULE: Target > 5 cells. Deploying relay drone at midpoint ({mid_x}, {mid_y}).")
                     
                     relay_drone = next((drone for drone in state["drones"] if drone["id"] != drone_id and drone.get("status") == "idle"), None)
@@ -104,6 +107,7 @@ async def tool_execution_node(state: SwarmState) -> SwarmState:
                             state["mission_log"].append(f"[MCP] {res.content[0].text}")
                             relay_drone["x"] = mid_x
                             relay_drone["y"] = mid_y
+                            relay_drone["status"] = "relay"
                             state["active_relays"][drone_id] = relay_drone["id"]
                         except Exception as e:
                             state["mission_log"].append(f"[MCP ERROR] {str(e)}")
@@ -113,39 +117,30 @@ async def tool_execution_node(state: SwarmState) -> SwarmState:
         res_text = res.content[0].text
         state["mission_log"].append(f"[MCP] {res_text}")
         
-        # Parse MCP JSON output dynamically to keep SwarmState actively synchronized with the backend
-        if "error" not in res_text.lower():
+        # Authoritative Base-Station Synchronization:
+        # We secretly pull fresh telemetry from the MCP Physics Simulator in the background here.
+        # This keeps the AI's SwarmState perfectly accurate without forcing the AI to waste 
+        # API tokens/turns explicitly asking for battery updates.
+        drone_id = params.get("drone_id")
+        if drone_id and "error" not in res_text.lower():
             try:
                 import json
-                res_data = json.loads(res_text)
-                drone = next((drone for drone in state["drones"] if drone["id"] == params.get("drone_id")), None)
-                if drone:
-                    if "battery" in res_data:
-                        drone["battery"] = res_data["battery"]
-                    elif "battery_remaining" in res_data:
-                        drone["battery"] = res_data["battery_remaining"]
-                        
-                    if "status" in res_data:
-                        drone["status"] = res_data["status"]
-                    if res_data.get("recovered"): 
-                        drone["status"] = "idle"
-                        
-                    if "new_position" in res_data:
-                        drone["x"] = res_data["new_position"]["x"]
-                        drone["y"] = res_data["new_position"]["y"]
-                    elif "position" in res_data:
-                        drone["x"] = res_data["position"]["x"]
-                        drone["y"] = res_data["position"]["y"]
+                sync_res = await mcp_client.session.call_tool("get_drone_status", {"drone_id": drone_id})
+                sync_data = json.loads(sync_res.content[0].text)
+                
+                drone = next((drone for drone in state["drones"] if drone["id"] == drone_id), None)
+                if drone and "error" not in sync_data:
+                    drone["battery"] = sync_data.get("battery", drone["battery"])
+                    drone["status"] = sync_data.get("status", drone["status"])
+                    
+                    position = sync_data.get("position", {})
+                    drone["x"] = position.get("x", drone["x"])
+                    drone["y"] = position.get("y", drone["y"])
             except Exception:
                 pass
 
-        # Post tool application logic check heuristics to keep graph moving
-        if tool_name == "move_to" and "error" not in res_text.lower() and "jitter" not in res_text.lower():
-            drone = next((drone for drone in state["drones"] if drone["id"] == params.get("drone_id")), None)
-            if drone and not ("new_position" in res_text or "position" in res_text):
-                drone["x"] = params.get("x", 0)
-                drone["y"] = params.get("y", 0)
-        elif tool_name in ["thermal_scan", "acoustic_scan"]:
+        # Post-Tool application heuristics to advance the LangGraph loops
+        if tool_name in ["thermal_scan", "acoustic_scan"]:
             drone = next((drone for drone in state["drones"] if drone["id"] == params.get("drone_id")), None)
             matched = False
             if drone:
