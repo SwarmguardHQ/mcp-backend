@@ -198,8 +198,8 @@ class MissionRunner:
                 await subscriber_queue.put(completion_log)
 
         except Exception as exc:
-            state.status      = "failed"
-            state.error       = str(exc)
+            state.status = "failed"
+            state.error = str(exc)
             state.finished_at = datetime.now(timezone.utc).isoformat()
             error_log = {"type": "error", "message": str(exc)}
             state.history.append(error_log)
