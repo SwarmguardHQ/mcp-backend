@@ -47,7 +47,7 @@ async def commander_node(state: SwarmState) -> SwarmState:
         context += "TARGET PRIORITY: All sectors scanned. Await further instructions.\n"
     
     # 3. Call LLM (With structured output)
-    llm = ChatGoogleGenerativeAI(model="gemini-3.1-flash-lite-preview", temperature=0)
+    llm = ChatGoogleGenerativeAI(model="gemini-2.5-flash", temperature=0)
     structured_llm = llm.with_structured_output(AgentOutput)
 
     # Re-apply pacing to prevent 429 Too Many Requests hanging the terminal
