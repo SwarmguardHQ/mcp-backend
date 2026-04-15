@@ -1,3 +1,5 @@
+# For testing purposes
+
 import os
 import asyncio
 from datetime import datetime
@@ -45,6 +47,7 @@ async def stream_mission(scenario_name: str):
     
     yield f"[SYSTEM] Starting AETHER Swarm Commander (Scenario: {scenario_name})..."
     
+    # Boots up MCP server
     env = os.environ.copy()
     env["PYTHONPATH"] = mcp_backend_dir
     
@@ -54,6 +57,7 @@ async def stream_mission(scenario_name: str):
         env=env
     )
     
+    # Initialize pipe between agent and mcp
     async with stdio_client(server_params) as (read, write):
         async with ClientSession(read, write) as session:
             await session.initialize()

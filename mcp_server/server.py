@@ -161,6 +161,9 @@ async def list_tools() -> ListToolsResult:
                  "properties": {"drone_id": {"type": "string"}},
                  "required": ["drone_id"],
              }),
+        Tool(name="get_world_state",
+             description="Full JSON snapshot of all drones and survivors for the dashboard.",
+             inputSchema={"type": "object", "properties": {}, "required": []}),
 
         # Mesh / offline
         Tool(name="broadcast_mesh_message",
@@ -210,6 +213,7 @@ TOOL_MAP: dict[str, Any] = {
     "broadcast_mesh_message":     T.broadcast_mesh_message,
     "attempt_drone_recovery":     T.attempt_drone_recovery,
     "get_mesh_log":               T.get_mesh_log,
+    "get_world_state":            T.get_world_state,
 }
 
 

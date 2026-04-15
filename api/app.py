@@ -92,10 +92,11 @@ def main():
     from utils.config import API_HOST, API_PORT
     uvicorn.run(
         "api.app:app",
-        host      = API_HOST,
-        port      = API_PORT,
-        reload    = True,
-        log_level = "info",
+        host       = API_HOST,
+        port       = API_PORT,
+        reload     = True,
+        log_level  = "info",
+        access_log = False,
     )
 
 
