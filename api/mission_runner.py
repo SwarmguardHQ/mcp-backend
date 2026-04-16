@@ -252,6 +252,8 @@ def _sync_local_world(snapshot_text: str):
             d.x, d.y = d_data["position"]["x"], d_data["position"]["y"]
             d.battery = d_data["battery"]
             d.status = DroneStatus(d_data["status"])
+            d.assigned_sector = d_data.get("assigned_sector")
+            d.payload = d_data.get("payload")
 
     for s_data in snap.get("survivors", []):
         if s := local_world.get_survivor(s_data["survivor_id"]):
