@@ -92,9 +92,16 @@ class MissionRunner:
             from agent.graph import create_graph
             from agent.state import SwarmState
             from agent.mcp.client import mcp_client
-            from utils.config import INITIAL_FLEET
+            # ── 1. Resolve Scenario Configuration ──────────────────────────────
+            # We dynamically load the scenario module to ensure the AI and the simulation 
+            # use the EXACT SAME drone fleet and survivor locations.
+            try:
+                sc_mod = importlib.import_module(f"scenarios.{state.scenario}")
+                fleet = getattr(sc_mod, "INITIAL_FLEET", [])
+            except Exception:
+                # Fallback to the global default if the scenario module is missing
+                from utils.config import INITIAL_FLEET as fleet
 
-            # ── 1. Build initial SwarmState ─────────────────────────────────────
             agent_drones = [
                 {
                     "id":      drone["id"],
@@ -103,7 +110,7 @@ class MissionRunner:
                     "y":       drone["y"],
                     "status":  "offline" if drone.get("offline") else "idle",
                 }
-                for drone in INITIAL_FLEET
+                for drone in fleet
             ]
             initial_state = SwarmState(
                 drones=agent_drones,
@@ -120,10 +127,17 @@ class MissionRunner:
                 mission_prompt=prompt,
             )
 
-            # ── 2. Start the MCP server side-car ────────────────────────────────
+            # ── 2. Sync Local World Tracking ────────────────────────────────────
+            # The API process maintains its own tracking state for the dashboard.
+            # We must force it to reset its survivors/drones to match the chosen scenario.
+            from mcp_server.world_state import world as local_world
+            local_world.reinitialize(state.scenario)
+
+            # ── 3. Start the MCP server side-car ────────────────────────────────
             server_path = Path(__file__).parent.parent / "mcp_server" / "server.py"
             env = os.environ.copy()
             env["PYTHONPATH"] = str(Path(__file__).parent.parent)
+            env["SCENARIO"]   = state.scenario  # Synchronize simulation with chosen mission
             params = StdioServerParameters(
                 command=sys.executable,
                 args=[str(server_path)],
