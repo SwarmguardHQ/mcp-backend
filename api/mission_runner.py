@@ -154,7 +154,7 @@ class MissionRunner:
                             new_logs = state_update["mission_log"][log_index:]
                             for log_msg in new_logs:
                                 state.step_count += 1
-                                print(f"  🤖 AGENT [{node_name}]: {log_msg}")
+                                # print(f"  🤖 AGENT [{node_name}]: {log_msg}")
 
                                 ui_tool = _classify_tool(log_msg, node_name)
                                 await _broadcast(state, {
