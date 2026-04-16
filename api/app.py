@@ -96,7 +96,7 @@ def main():
         port       = API_PORT,
         reload     = True,
         log_level  = "info",
-        access_log = False,
+        access_log = True,
     )
 
 
