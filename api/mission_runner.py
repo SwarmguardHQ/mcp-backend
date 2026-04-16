@@ -162,7 +162,7 @@ class MissionRunner:
                                     "phase":          node_name,
                                     "reasoning":      log_msg,
                                     "tool":           ui_tool,
-                                    "result_summary": "(update)",
+                                    "result_summary": "success",
                                 })
                                 await asyncio.sleep(0.4)  # Pacing for live-feed feel
 
