@@ -33,6 +33,7 @@ class Drone:
         self.x           = x
         self.y           = y
         self.battery     = battery
+        self.locked      = False
         self.status      = DroneStatus.OFFLINE if offline else DroneStatus.IDLE
         self.payload: Optional[str] = None
         self.last_seen   = _now()
@@ -77,6 +78,8 @@ class Drone:
     # ── state transitions ─────────────────────────────────────────────────────
 
     def move(self, x: int, y: int, cost_per_cell: float = 3.0) -> dict:
+        if self.locked:
+            return {"error": f"Drone {self.drone_id} is operationally locked."}
         cost = self.battery_cost_to(x, y, cost_per_cell)
         self.battery = max(0, self.battery - cost)
         self.x, self.y = x, y
@@ -138,6 +141,7 @@ class Drone:
             "position":        {"x": self.x, "y": self.y},
             "battery":         self.battery,
             "status":          self.status.value,
+            "locked":          self.locked,
             "payload":         self.payload,
             "assigned_sector": self.assigned_sector,
             "last_seen":       self.last_seen,

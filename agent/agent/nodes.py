@@ -101,12 +101,20 @@ async def tool_execution_node(state: SwarmState) -> SwarmState:
                     
                     if handover_partner:
                         state["mission_log"].append(f"[SYSTEM] RELAY HANDOVER: {handover_partner['id']} taking over for {drone_id}.")
-                        # Update the active relay map to point to the new drone
+                        
+                        # 1. Lock the new relay on the server
+                        await mcp_client.session.call_tool("lock_drone", {"drone_id": handover_partner["id"]})
+                        handover_partner["locked"] = True
+                        
+                        # 2. Unlock the original drone on the server
+                        await mcp_client.session.call_tool("unlock_drone", {"drone_id": drone_id})
+                        drone["locked"] = False
+
+                        # Update the active relay map
                         for main_id, relay_id in state["active_relays"].items():
                             if relay_id == drone_id:
                                 state["active_relays"][main_id] = handover_partner["id"]
                                 break
-                        handover_partner["status"] = "relay"
                         # The original drone is now free to move
                     else:
                         state["mission_log"].append(f"[SYSTEM ERROR] PERSISTENT RELAY: {drone_id} is locked to maintain mesh connectivity.")
@@ -164,9 +172,11 @@ async def tool_execution_node(state: SwarmState) -> SwarmState:
                                         state["mission_log"].append("[SYSTEM ERROR] Relay deployment failed. Aborting main move for safety.")
                                         return state
 
+                                    # LOCK THE RELAY ON THE SERVER
+                                    await mcp_client.session.call_tool("lock_drone", {"drone_id": relay_drone["id"]})
                                     relay_drone["x"] = mid_x
                                     relay_drone["y"] = mid_y
-                                    relay_drone["status"] = "relay"
+                                    relay_drone["locked"] = True
                                     state["active_relays"][drone_id] = relay_drone["id"]
                                 except Exception as e:
                                     state["mission_log"].append(f"[MCP ERROR] Relay Exception: {str(e)}")
@@ -205,6 +215,7 @@ async def tool_execution_node(state: SwarmState) -> SwarmState:
                     position = sync_data.get("position", {})
                     drone["x"] = position.get("x", drone["x"])
                     drone["y"] = position.get("y", drone["y"])
+                    drone["locked"] = sync_data.get("locked", drone["locked"])
             except Exception:
                 pass
 
@@ -240,6 +251,8 @@ async def tool_execution_node(state: SwarmState) -> SwarmState:
                     if dist_to_base <= 5:
                         relay_drone = next((d for d in state["drones"] if d["id"] == relay_id), None)
                         if relay_drone:
+                            # UNLOCK THE RELAY ON THE SERVER
+                            await mcp_client.session.call_tool("unlock_drone", {"drone_id": relay_id})
                             relay_drone["status"] = "idle"
                             state["mission_log"].append(f"[SYSTEM] AUTO-RELEASE: Relay {relay_id} released (Signal link no longer needed).")
                         released_ids.append(main_id)

@@ -41,6 +41,20 @@ async def list_tools() -> ListToolsResult:
                  },
                  "required": ["drone_id", "sector_label"],
              }),
+        Tool(name="lock_drone",
+             description="Operationally lock a drone in place (prevents movement).",
+             inputSchema={
+                 "type": "object",
+                 "properties": {"drone_id": {"type": "string"}},
+                 "required": ["drone_id"],
+             }),
+        Tool(name="unlock_drone",
+             description="Unlock a drone, allowing it to move again.",
+             inputSchema={
+                 "type": "object",
+                 "properties": {"drone_id": {"type": "string"}},
+                 "required": ["drone_id"],
+             }),
 
         # Movement
         Tool(name="move_to",
@@ -208,6 +222,8 @@ TOOL_MAP: dict[str, Any] = {
     "get_rescue_priority_list":   T.get_rescue_priority_list,
     "mark_survivor_rescued":      T.mark_survivor_rescued,
     "get_drone_status":           T.get_drone_status,
+    "lock_drone":                 D.lock_drone,
+    "unlock_drone":               D.unlock_drone,
     "get_swarm_summary":          T.get_swarm_summary,
     "get_mission_log":            T.get_mission_log,
     "broadcast_mesh_message":     T.broadcast_mesh_message,

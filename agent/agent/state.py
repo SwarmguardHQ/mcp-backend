@@ -19,6 +19,7 @@ class Drone(TypedDict):
     x: int
     y: int
     status: str
+    locked: bool
 
 class SwarmState(TypedDict):
     """
