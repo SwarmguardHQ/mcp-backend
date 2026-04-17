@@ -209,7 +209,7 @@ async def tool_execution_node(state: SwarmState) -> SwarmState:
                 pass
 
         # Post-Tool application heuristics to advance the LangGraph loops
-        if tool_name in ["thermal_scan", "acoustic_scan"]:
+        if tool_name in ["thermal_scan"]:
             drone = next((drone for drone in state["drones"] if drone["id"] == params.get("drone_id")), None)
             matched = False
             if drone:
