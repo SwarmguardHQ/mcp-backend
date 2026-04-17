@@ -115,10 +115,10 @@ async def tool_execution_node(state: SwarmState) -> SwarmState:
                 # ── 2. Battery Rule Override ──────────────────────────────────
                 battery_override_active = False
                 if drone["battery"] < 20:
-                    state["mission_log"].append(f"[SYSTEM] BATTERY RULE: {drone_id} battery < 20. Returning to base.")
-                    target_x, target_y = mcp_client.base_x, mcp_client.base_y
-                    # Update the params to reflect the new target
-                    params["x"], params["y"] = target_x, target_y
+                    state["mission_log"].append(f"[SYSTEM] BATTERY RULE: {drone_id} battery < 20. Switching to return_to_charging_station.")
+                    # Override name and params to use specialized safety tool
+                    tool_name = "return_to_charging_station"
+                    params = {"drone_id": drone_id}
                     battery_override_active = True
                 
                 # ── 3. Relay Rule Override ────────────────────────────────────
