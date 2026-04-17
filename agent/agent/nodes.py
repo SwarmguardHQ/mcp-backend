@@ -47,7 +47,8 @@ async def commander_node(state: SwarmState) -> SwarmState:
         context += "TARGET PRIORITY: All sectors scanned. Await further instructions.\n"
     
     # 3. Call LLM (With structured output)
-    llm = ChatGoogleGenerativeAI(model="gemini-3.1-flash-lite-preview", temperature=0)
+    # llm = ChatGoogleGenerativeAI(model="gemini-3.1-flash-lite-preview", temperature=0)
+    llm = ChatGoogleGenerativeAI(model="gemini-2.5-flash", temperature=0)
     structured_llm = llm.with_structured_output(AgentOutput)
 
     # Re-apply pacing to prevent 429 Too Many Requests hanging the terminal
@@ -131,37 +132,48 @@ async def tool_execution_node(state: SwarmState) -> SwarmState:
                     if distance > 5 and drone_id not in state["active_relays"]:
                         mid_x = int((drone["x"] + target_x) / 2)
                         mid_y = int((drone["y"] + target_y) / 2)
-                        state["mission_log"].append(f"[SYSTEM] RELAY RULE: Target > 5 cells. Deploying relay drone at midpoint ({mid_x}, {mid_y}).")
                         
-                        # We pick an IDLE drone with at least 25% battery. 
-                        # This gives it a buffer so it doesn't immediately trigger the < 20% return rule.
-                        relay_drone = next(
-                            (d for d in state["drones"] 
-                             if d["id"] != drone_id and d.get("status") == "idle" and d.get("battery", 0) >= 25), 
-                            None
-                        )
+                        # ── 3a. Shared Relay Check ────────────────────────────
+                        # Is there ANY drone already at this exact midpoint?
+                        existing_relay = next((d for d in state["drones"] if d["id"] != drone_id and d["x"] == mid_x and d["y"] == mid_y), None)
                         
-                        if relay_drone:
-                            try:
-                                # Note: We must await this tool call BEFORE the main move_to to ensure the link is established
-                                relay_res = await mcp_client.session.call_tool("move_to", {"drone_id": relay_drone["id"], "x": mid_x, "y": mid_y})
-                                relay_text = relay_res.content[0].text
-                                state["mission_log"].append(f"[MCP] {relay_text}")
-                                
-                                if "error" in relay_text.lower():
-                                    state["mission_log"].append("[SYSTEM ERROR] Relay deployment failed. Aborting main move for safety.")
-                                    return state
-
-                                relay_drone["x"] = mid_x
-                                relay_drone["y"] = mid_y
-                                relay_drone["status"] = "relay"
-                                state["active_relays"][drone_id] = relay_drone["id"]
-                            except Exception as e:
-                                state["mission_log"].append(f"[MCP ERROR] Relay Exception: {str(e)}")
-                                return state
+                        if existing_relay:
+                            state["mission_log"].append(f"[SYSTEM] RELAY RULE: Utilizing existing drone {existing_relay['id']} at ({mid_x}, {mid_y}) as shared relay.")
+                            state["active_relays"][drone_id] = existing_relay["id"]
+                            existing_relay["status"] = "relay"
+                            # Skip move_to since it's already there
                         else:
-                            state["mission_log"].append(f"[SYSTEM ERROR] NO IDLE DRONES: Required relay could not be deployed. Aborting move.")
-                            return state
+                            state["mission_log"].append(f"[SYSTEM] RELAY RULE: Target > 5 cells. Deploying relay drone at midpoint ({mid_x}, {mid_y}).")
+                            
+                            # ── 3b. Lowest Battery Heuristic ──────────────────────
+                            idle_drones = [
+                                d for d in state["drones"] 
+                                if d["id"] != drone_id and d.get("status") == "idle" and d.get("battery", 0) >= 25
+                            ]
+                            
+                            relay_drone = min(idle_drones, key=lambda d: d.get("battery", 100)) if idle_drones else None
+                            
+                            if relay_drone:
+                                try:
+                                    # Note: We must await this tool call BEFORE the main move_to to ensure the link is established
+                                    relay_res = await mcp_client.session.call_tool("move_to", {"drone_id": relay_drone["id"], "x": mid_x, "y": mid_y})
+                                    relay_text = relay_res.content[0].text
+                                    state["mission_log"].append(f"[MCP] {relay_text}")
+                                    
+                                    if "error" in relay_text.lower():
+                                        state["mission_log"].append("[SYSTEM ERROR] Relay deployment failed. Aborting main move for safety.")
+                                        return state
+
+                                    relay_drone["x"] = mid_x
+                                    relay_drone["y"] = mid_y
+                                    relay_drone["status"] = "relay"
+                                    state["active_relays"][drone_id] = relay_drone["id"]
+                                except Exception as e:
+                                    state["mission_log"].append(f"[MCP ERROR] Relay Exception: {str(e)}")
+                                    return state
+                            else:
+                                state["mission_log"].append(f"[SYSTEM ERROR] NO IDLE DRONES: Required relay could not be deployed. Aborting move.")
+                                return state
                             
         # Universal Dynamic Dispatcher
         res = await mcp_client.session.call_tool(tool_name, params)
