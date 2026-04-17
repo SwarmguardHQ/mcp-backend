@@ -7,6 +7,7 @@ import math
 from datetime import datetime, timezone
 from enum import Enum
 from typing import Optional
+import threading
 
 
 class DroneStatus(str, Enum):
@@ -37,6 +38,7 @@ class Drone:
         self.last_seen   = _now()
         self.mission_log: list[str] = []
         self.assigned_sector: Optional[str] = None
+        self._idle_timer: Optional[threading.Timer] = None
 
     # ── helpers ──────────────────────────────────────────────────────────────
 
@@ -53,6 +55,25 @@ class Drone:
     def can_reach(self, x: int, y: int, reserve: int = 15, cost_per_cell: float = 3.0) -> bool:
         return self.battery >= self.battery_cost_to(x, y, cost_per_cell) + reserve
 
+    def _schedule_idle(self, delay: float = 5.0) -> None:
+        if self._idle_timer:
+            self._idle_timer.cancel()
+            
+        def _to_idle():
+            # Don't switch if offline, charging or already idle
+            if self.status not in (DroneStatus.OFFLINE, DroneStatus.CHARGING, DroneStatus.IDLE):
+                self.status = DroneStatus.IDLE
+                self.log("Task completed — auto-switched to IDLE")
+                try:
+                    from mcp_server.mesa_bridge import notify_drone_changed
+                    notify_drone_changed(self.drone_id)
+                except ImportError:
+                    pass
+
+        self._idle_timer = threading.Timer(delay, _to_idle)
+        self._idle_timer.daemon = True
+        self._idle_timer.start()
+
     # ── state transitions ─────────────────────────────────────────────────────
 
     def move(self, x: int, y: int, cost_per_cell: float = 3.0) -> dict:
@@ -62,14 +83,19 @@ class Drone:
         self.status = DroneStatus.FLYING
         self.last_seen = _now()
         self.log(f"Moved to ({x},{y}), battery={self.battery}%")
+        self._schedule_idle(5.0)
         return {"new_position": {"x": x, "y": y}, "battery": self.battery}
 
     def start_scan(self, cost: int) -> None:
         self.battery = max(0, self.battery - cost)
         self.status = DroneStatus.SCANNING
         self.log(f"Scan at ({self.x},{self.y}), battery={self.battery}%")
+        self._schedule_idle(5.0)
 
     def start_charging(self, station_id: str) -> None:
+        if self._idle_timer:
+            self._idle_timer.cancel()
+            self._idle_timer = None
         self.status = DroneStatus.CHARGING
         self.log(f"Charging at {station_id}")
 
@@ -82,15 +108,20 @@ class Drone:
         self.payload = supply
         self.status = DroneStatus.DELIVERING
         self.log(f"Picked up {supply}")
+        self._schedule_idle(5.0)
 
     def drop_off(self) -> Optional[str]:
         delivered = self.payload
         self.payload = None
         self.status = DroneStatus.FLYING
         self.log(f"Delivered {delivered}")
+        self._schedule_idle(5.0)
         return delivered
 
     def go_offline(self, reason: str = "unknown") -> None:
+        if self._idle_timer:
+            self._idle_timer.cancel()
+            self._idle_timer = None
         self.status = DroneStatus.OFFLINE
         self.log(f"OFFLINE — {reason}")
 
