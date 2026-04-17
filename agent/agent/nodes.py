@@ -88,35 +88,80 @@ async def tool_execution_node(state: SwarmState) -> SwarmState:
             drone = next((drone for drone in state["drones"] if drone["id"] == drone_id), None)
             
             if drone:
-                # 1. Battery Rule Override
+                # ── 1. Persistent Relay Rule ──────────────────────────────────
+                # If this drone is currently serving as a relay for another drone, 
+                # it is locked in place unless a "Handover" drone is available.
+                if "active_relays" in state and drone_id in state["active_relays"].values():
+                    handover_partner = next(
+                        (d for d in state["drones"] 
+                         if d["id"] != drone_id and d["x"] == drone["x"] and d["y"] == drone["y"] and d.get("status") == "idle"), 
+                        None
+                    )
+                    
+                    if handover_partner:
+                        state["mission_log"].append(f"[SYSTEM] RELAY HANDOVER: {handover_partner['id']} taking over for {drone_id}.")
+                        # Update the active relay map to point to the new drone
+                        for main_id, relay_id in state["active_relays"].items():
+                            if relay_id == drone_id:
+                                state["active_relays"][main_id] = handover_partner["id"]
+                                break
+                        handover_partner["status"] = "relay"
+                        # The original drone is now free to move
+                    else:
+                        state["mission_log"].append(f"[SYSTEM ERROR] PERSISTENT RELAY: {drone_id} is locked to maintain mesh connectivity.")
+                        return state  # Block the move entirely
+                
+                # ── 2. Battery Rule Override ──────────────────────────────────
+                battery_override_active = False
                 if drone["battery"] < 20:
                     state["mission_log"].append(f"[SYSTEM] BATTERY RULE: {drone_id} battery < 20. Returning to base.")
                     target_x, target_y = mcp_client.base_x, mcp_client.base_y
                     # Update the params to reflect the new target
                     params["x"], params["y"] = target_x, target_y
+                    battery_override_active = True
                 
-                # 2. Relay Rule Override
-                distance = get_distance(drone["x"], drone["y"], target_x, target_y)
-                
-                if "active_relays" not in state:
-                    state["active_relays"] = {}
-                
-                if distance > 5 and drone_id not in state["active_relays"]:
-                    mid_x = int((drone["x"] + target_x) / 2)
-                    mid_y = int((drone["y"] + target_y) / 2)
-                    state["mission_log"].append(f"[SYSTEM] RELAY RULE: Target > 5 cells. Deploying relay drone at midpoint ({mid_x}, {mid_y}).")
+                # ── 3. Relay Rule Override ────────────────────────────────────
+                # Skip if the battery override is active — no relay needed for a return-to-base trip.
+                if not battery_override_active:
+                    distance = get_distance(drone["x"], drone["y"], target_x, target_y)
                     
-                    relay_drone = next((drone for drone in state["drones"] if drone["id"] != drone_id and drone.get("status") == "idle"), None)
-                    if relay_drone:
-                        try:
-                            res = await mcp_client.session.call_tool("move_to", {"drone_id": relay_drone["id"], "x": mid_x, "y": mid_y})
-                            state["mission_log"].append(f"[MCP] {res.content[0].text}")
-                            relay_drone["x"] = mid_x
-                            relay_drone["y"] = mid_y
-                            relay_drone["status"] = "relay"
-                            state["active_relays"][drone_id] = relay_drone["id"]
-                        except Exception as e:
-                            state["mission_log"].append(f"[MCP ERROR] {str(e)}")
+                    if "active_relays" not in state:
+                        state["active_relays"] = {}
+                    
+                    if distance > 5 and drone_id not in state["active_relays"]:
+                        mid_x = int((drone["x"] + target_x) / 2)
+                        mid_y = int((drone["y"] + target_y) / 2)
+                        state["mission_log"].append(f"[SYSTEM] RELAY RULE: Target > 5 cells. Deploying relay drone at midpoint ({mid_x}, {mid_y}).")
+                        
+                        # We pick an IDLE drone with at least 25% battery. 
+                        # This gives it a buffer so it doesn't immediately trigger the < 20% return rule.
+                        relay_drone = next(
+                            (d for d in state["drones"] 
+                             if d["id"] != drone_id and d.get("status") == "idle" and d.get("battery", 0) >= 25), 
+                            None
+                        )
+                        
+                        if relay_drone:
+                            try:
+                                # Note: We must await this tool call BEFORE the main move_to to ensure the link is established
+                                relay_res = await mcp_client.session.call_tool("move_to", {"drone_id": relay_drone["id"], "x": mid_x, "y": mid_y})
+                                relay_text = relay_res.content[0].text
+                                state["mission_log"].append(f"[MCP] {relay_text}")
+                                
+                                if "error" in relay_text.lower():
+                                    state["mission_log"].append("[SYSTEM ERROR] Relay deployment failed. Aborting main move for safety.")
+                                    return state
+
+                                relay_drone["x"] = mid_x
+                                relay_drone["y"] = mid_y
+                                relay_drone["status"] = "relay"
+                                state["active_relays"][drone_id] = relay_drone["id"]
+                            except Exception as e:
+                                state["mission_log"].append(f"[MCP ERROR] Relay Exception: {str(e)}")
+                                return state
+                        else:
+                            state["mission_log"].append(f"[SYSTEM ERROR] NO IDLE DRONES: Required relay could not be deployed. Aborting move.")
+                            return state
                             
         # Universal Dynamic Dispatcher
         res = await mcp_client.session.call_tool(tool_name, params)
@@ -137,7 +182,13 @@ async def tool_execution_node(state: SwarmState) -> SwarmState:
                 drone = next((drone for drone in state["drones"] if drone["id"] == drone_id), None)
                 if drone and "error" not in sync_data:
                     drone["battery"] = sync_data.get("battery", drone["battery"])
-                    drone["status"] = sync_data.get("status", drone["status"])
+                    
+                    # Do NOT overwrite status if this drone is acting as a relay.
+                    # The MCP server doesn't know about "relay" status — it would return
+                    # "idle" or "flying", which would silently break the persistent relay lock.
+                    is_relay = drone["id"] in state.get("active_relays", {}).values()
+                    if not is_relay:
+                        drone["status"] = sync_data.get("status", drone["status"])
                     
                     position = sync_data.get("position", {})
                     drone["x"] = position.get("x", drone["x"])
@@ -164,6 +215,25 @@ async def tool_execution_node(state: SwarmState) -> SwarmState:
                 if target_sectors:
                     state["search_grid"][target_sectors[0]] = True
                     state["mission_log"].append(f"[SYSTEM] Fallback heuristic: marked '{target_sectors[0]}' as scanned.")
+
+        # ── 3. Auto-Release Logic ─────────────────────────────────────────────
+        # If a drone that was using a relay flies back into the safe communication
+        # range (distance <= 5 from base), the relay drone is automatically released.
+        if "active_relays" in state:
+            released_ids = []
+            for main_id, relay_id in state["active_relays"].items():
+                main_drone = next((d for d in state["drones"] if d["id"] == main_id), None)
+                if main_drone:
+                    dist_to_base = get_distance(main_drone["x"], main_drone["y"], mcp_client.base_x, mcp_client.base_y)
+                    if dist_to_base <= 5:
+                        relay_drone = next((d for d in state["drones"] if d["id"] == relay_id), None)
+                        if relay_drone:
+                            relay_drone["status"] = "idle"
+                            state["mission_log"].append(f"[SYSTEM] AUTO-RELEASE: Relay {relay_id} released (Signal link no longer needed).")
+                        released_ids.append(main_id)
+            
+            for lid in released_ids:
+                del state["active_relays"][lid]
             
     except Exception as e:
          state["mission_log"].append(f"[ERROR] Tool execution failed: {str(e)}")

@@ -117,9 +117,9 @@ class MissionRunner:
                 mission_log=[],
                 search_grid={
                     "sector_1": False,
-                    "sector_2": True,
+                    "sector_2": False,
                     "sector_3": False,
-                    "sector_4": True,
+                    "sector_4": False,
                     "sector_5": False,
                 },
                 active_relays={},
