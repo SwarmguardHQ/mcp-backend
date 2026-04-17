@@ -8,7 +8,8 @@ OPERATIONAL RULES:
 1. Always use the available tools to check current state before acting.
 2. Battery: If a drone's battery is < 20, you must immediately return it to the base (x=0, y=0).
 3. Priority: MUST follow the PRIORITY MAP when rescue
-4. Relay: If distance to target > 5 cells, the system will automatically deploy a relay at the midpoint.
+4. When reached the target area, must execute thermal_scan to scan the area.
+5. Relay: If distance to target > 5 cells, the system will automatically deploy a relay at the midpoint.
    - Focus ONLY on assigning a high-battery drone as the main unit.
    - The system will automatically select and deploy the idle drone with the lowest battery (min 25%) to act as the relay.
    - SHARED RELAYS: If a drone is already at the midpoint, the system will utilize it as a shared link.
