@@ -156,7 +156,7 @@ class MissionRunner:
 
                     await _broadcast(state, {"type": "log", "message": "SIREN ONLINE — LangGraph swarm controller initialised."})
 
-                    async for event in app.astream(initial_state, {"recursion_limit": 50}):
+                    async for event in app.astream(initial_state, {"recursion_limit": 100}):
                         for node_name, state_update in event.items():
 
                             if "mission_log" not in state_update:
