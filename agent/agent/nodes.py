@@ -33,7 +33,7 @@ async def commander_node(state: SwarmState) -> SwarmState:
     
     if state.get("mission_log"):
         context += "\nRECENT ACTION MEMORY (Do not repeat the exact same tool calls if they just succeeded):\n"
-        context += "\n".join(state["mission_log"][-6:]) + "\n"
+        context += "\n".join(state["mission_log"][-12:]) + "\n"
         
     context += f"\nAVAILABLE TOOLS:\n{tools_text}\n"
     context += "You must format your tool_call strictly using the exact 'name' and matching 'parameters' keys specified in the schemas above.\n\n"
