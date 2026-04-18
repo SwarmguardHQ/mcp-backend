@@ -85,15 +85,30 @@ def deliver_supplies(drone_id: str, survivor_id: str) -> dict:
 
     delivered = drone.drop_off()
     survivor.supplies_received.append(delivered)
-    from mcp_server.mesa_bridge import notify_drone_changed
+    
+    # AUTOMATIC RESCUE: Once supplies are reached, we mark the extraction as complete.
+    # like how `mark_survivor_rescued` did
+    survivor.rescued = True
+    drone.log(f"Delivered {delivered} to {survivor_id} and marked as RESCUED")
 
+    from mcp_server.mesh_radio import broadcast_mesh_message
+    # Calculate remaining survivors who ARE found but NOT yet rescued
+    remaining = [s for s in world.survivors.values() if s.detected and not s.rescued]
+    
+    broadcast_mesh_message(
+        drone_id,
+        f"DELIVERED AND RESCUED {survivor_id}. {len(remaining)} pending detections remain."
+    )
+
+    from mcp_server.mesa_bridge import notify_drone_changed
     notify_drone_changed(drone_id)
 
     return {
         "drone_id":    drone_id,
+        "status":      "rescued_via_delivery",
         "delivered":   delivered,
         "survivor_id": survivor_id,
         "condition":   survivor.condition,
-        "priority":    PRIORITY_SCORES.get(survivor.condition, 0),
-        "supplies_received_by_survivor": survivor.supplies_received,
+        "remaining_pending": len(remaining),
+        "mission_complete": len(remaining) == 0,
     }

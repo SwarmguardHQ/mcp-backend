@@ -132,7 +132,7 @@ async def list_tools() -> ListToolsResult:
                  "required": ["drone_id", "supply_type"],
              }),
         Tool(name="deliver_supplies",
-             description="Deliver current payload to a survivor (drone must be within 1.5 cells).",
+             description="Deliver payload and mark survivor as RESCUED (Effective end of lifecycle for this target).",
              inputSchema={
                  "type": "object",
                  "properties": {
