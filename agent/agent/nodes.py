@@ -1,4 +1,5 @@
 import ast
+import json
 from typing import Literal
 import asyncio
 
@@ -37,18 +38,57 @@ async def commander_node(state: SwarmState) -> SwarmState:
     context += f"\nAVAILABLE TOOLS:\n{tools_text}\n"
     context += "You must format your tool_call strictly using the exact 'name' and matching 'parameters' keys specified in the schemas above.\n\n"
     
+    # 3. Phase Handling & Target Priority
     if target_sector:
         data = PRIORITY_MAP.get(target_sector, {})
         zone_type = data.get("type", "Generic")
         target_x = data.get("x", 0)
         target_y = data.get("y", 0)
+        context += f"PHASE: SEARCH & SCAN\n"
         context += f"TARGET PRIORITY: Sector '{target_sector}' ({zone_type} at X:{target_x}, Y:{target_y}) is the highest priority unscanned sector.\n"
     else:
-        context += "TARGET PRIORITY: All sectors scanned. Await further instructions.\n"
+        # Are there any detected survivors who haven't been rescued yet?
+        rescue_pending = state.get("detected_survivors", [])
+        
+        if rescue_pending:
+            context += f"PHASE: RESCUE & SUPPLY\n"
+            context += f"STATUS: SEARCH COMPLETE. All sectors cleared, but {len(rescue_pending)} survivor(s) are PENDING assistance:\n"
+            for s in rescue_pending:
+                context += f"  - {s['id']} at ({s['x']}, {s['y']}) [{s['condition'].upper()}]\n"
+            context += f"RESCUED SO FAR: {state.get('rescued_survivors', [])}\n"
+            context += (
+                f"OBJECTIVE: For each pending survivor — move the drone to their exact coordinates, "
+                f"then call deliver_supplies(drone_id, survivor_id). This automatically marks them RESCUED. "
+                f"Do NOT call mark_survivor_rescued separately.\n"
+            )
+        else:
+            context += "PHASE: MISSION COMPLETE\n"
+            context += "STATUS: All sectors scanned and all detected survivors rescued.\n"
+
+    # 4. URGENT DELIVERY: steer the LLM to deliver immediately
+    # If any drone is already carrying supplies AND is within delivery range of a
+    # pending survivor, inject an urgent directive so the LLM acts NOW.
+    rescue_pending_for_alert = state.get("detected_survivors", [])
+    if rescue_pending_for_alert:
+        urgent_deliveries = []
+        for d in state["drones"]:
+            if d.get("payload"):
+                for s in rescue_pending_for_alert:
+                    dist = get_distance(d["x"], d["y"], s["x"], s["y"])
+                    if dist <= 1.5:
+                        urgent_deliveries.append(
+                            f"{d['id']} is at ({d['x']},{d['y']}) carrying '{d['payload']}' "
+                            f"and is within delivery range of {s['id']} at ({s['x']},{s['y']}) [{s['condition'].upper()}]. "
+                            f"Call deliver_supplies(drone_id='{d['id']}', survivor_id='{s['id']}') IMMEDIATELY."
+                        )
+        if urgent_deliveries:
+            context += "\nURGENT — IMMEDIATE DELIVERY REQUIRED (do NOT plan, execute NOW):\n"
+            context += "\n".join(urgent_deliveries) + "\n"
+            context += "Your ONLY valid action is deliver_supplies for one of the above.\n"
     
-    # 3. Call LLM (With structured output)
-    # llm = ChatGoogleGenerativeAI(model="gemini-3.1-flash-lite-preview", temperature=0)
-    llm = ChatGoogleGenerativeAI(model="gemini-2.5-flash", temperature=0)
+    # 5. Call LLM (With structured output)
+    llm = ChatGoogleGenerativeAI(model="gemini-3.1-flash-lite-preview", temperature=0)
+    # llm = ChatGoogleGenerativeAI(model="gemini-2.5-flash", temperature=0)
     structured_llm = llm.with_structured_output(AgentOutput)
 
     # Re-apply pacing to prevent 429 Too Many Requests hanging the terminal
