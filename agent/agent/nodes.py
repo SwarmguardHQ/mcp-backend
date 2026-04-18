@@ -120,6 +120,44 @@ async def tool_execution_node(state: SwarmState) -> SwarmState:
         params = state["next_action"].parameters
         
         # Action routing
+
+        # 1. Relay Guard: Block unlock_drone on active relay drones
+        # The LLM can reach unlock_drone as a raw MCP tool. Unlocking a relay
+        # drone while its main drone is still > 5 cells from base would silently
+        # break the mesh link. We intercept here and demand the main drone flies
+        # back within range first (the auto-release will then fire automatically).
+        if tool_name == "unlock_drone":
+            relay_target = params.get("drone_id")
+            active_relays = state.get("active_relays", {})
+            relaying_for = [main_id for main_id, rid in active_relays.items() if rid == relay_target]
+            if relaying_for:
+                main_id = relaying_for[0]
+                main_drone = next((d for d in state["drones"] if d["id"] == main_id), None)
+                hint = ""
+                if main_drone:
+                    hint = (
+                        f" '{main_id}' is at ({main_drone['x']},{main_drone['y']}) — "
+                        f"move it within 5 cells of base (0,0) to trigger auto-release, "
+                        f"or deploy a handover relay at ({main_drone.get('x',0)//2},{main_drone.get('y',0)//2})."
+                    )
+                state["mission_log"].append(
+                    f"[SYSTEM ERROR] RELAY SHIELD: Cannot unlock '{relay_target}' — "
+                    f"it is the active relay for '{main_id}' and the mesh link is still live.{hint}"
+                )
+                return state
+
+        # 2. Phase Guard: Block rescue tools during SEARCH phase
+        # This is a hard, code-level enforcement — not just a prompt hint.
+        # If any sector is still unscanned, supply/rescue operations are forbidden.
+        unscanned_count = sum(1 for scanned in state.get("search_grid", {}).values() if not scanned)
+        if unscanned_count > 0 and tool_name in ("list_supply_depots", "collect_supplies", "deliver_supplies"):
+            remaining = [s for s, done in state.get("search_grid", {}).items() if not done]
+            state["mission_log"].append(
+                f"[SYSTEM] SEARCH PHASE LOCK: '{tool_name}' is forbidden while sectors remain unscanned: {remaining}. "
+                f"Complete all scans before starting rescue operations."
+            )
+            return state
+
         if tool_name == "move_to":
             drone_id = params.get("drone_id")
             target_x = params.get("x", 0)
