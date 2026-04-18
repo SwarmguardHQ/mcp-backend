@@ -12,8 +12,8 @@ RUN uv sync --frozen --no-dev --no-editable
 # ── Stage 2: Runtime image ─────────────────────────────────────────────────────
 FROM python:3.12-slim AS runtime
 
-ENV PORT=${API_PORT} \
-    API_HOST=${API_HOST} \
+ENV PORT=8080 \
+    API_HOST=0.0.0.0 \
     PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1
 
@@ -25,6 +25,6 @@ COPY . .
 
 ENV PATH="/app/.venv/bin:$PATH"
 
-EXPOSE ${API_PORT}
-
-CMD ["sh", "-c", "uvicorn", "api.app:main", "--host", "${API_HOST}", "--port", "${API_PORT}", "--log-level", "info"]
+# Expose nothing statically here, Cloud Run/Railway will use PORT.
+# Using shell form for CMD so env vars are expanded at runtime.
+CMD uvicorn api.app:app --host $API_HOST --port $PORT --log-level info
