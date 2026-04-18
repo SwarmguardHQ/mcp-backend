@@ -108,9 +108,9 @@ class WorldState:
         from mcp_server.drone_simulator import DroneStatus
         grid = [["." for _ in range(self.grid_size)] for _ in range(self.grid_size)]
         for depot in self.supply_depots:
-            grid[depot["y"]][depot["x"]] = "D"
+            grid[depot["y"]][depot["x"]] = "DS"
         for cs in self.charging_stations:
-            grid[cs["y"]][cs["x"]] = "C"
+            grid[cs["y"]][cs["x"]] = "CS"
         for s in self.survivors.values():
             if not s.rescued:
                 grid[s.y][s.x] = "!" if s.condition == "critical" else "?"
@@ -122,7 +122,7 @@ class WorldState:
             rows.append(str(self.grid_size - 1 - i) + " " + "".join(row))
         legend = (
             "Legend: A/B/C/D/E=Drones  !=Critical  ?=Survivor  "
-            "D=Supply depot  C=Charging station  .=Empty"
+            "DS=Supply depot  CS=Charging station  .=Empty"
         )
         return "\n".join(rows) + "\n" + legend
 
