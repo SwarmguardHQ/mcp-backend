@@ -40,13 +40,13 @@ SUPPLY_DEPOTS: list[dict] = [
     {
         "id": "D1",
         "x": 0, "y": 0,
-        "supplies": ["medical_kit", "water", "food"],
+        "supplies": ["medical_kit", "water", "food", "rope", "tarp", "radio"],
         "capacity": 50,
     },
     {
         "id": "D2",
-        "x": 9, "y": 9,
-        "supplies": ["rope", "tarp", "radio"],
+        "x": 3, "y": 9,
+        "supplies": ["medical_kit", "water", "food"],
         "capacity": 30,
     },
 ]
