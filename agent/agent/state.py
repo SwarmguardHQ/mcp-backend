@@ -20,6 +20,7 @@ class Drone(TypedDict):
     y: int
     status: str
     locked: bool
+    payload: Optional[str]   # None when empty, supply name when carrying
 
 class SwarmState(TypedDict):
     """
