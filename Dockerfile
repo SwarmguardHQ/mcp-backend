@@ -27,4 +27,4 @@ ENV PATH="/app/.venv/bin:$PATH"
 
 EXPOSE ${API_PORT}
 
-CMD ["uvicorn", "api.app:app", "--host", "${API_HOST}", "--port", "${API_PORT}", "--log-level", "info"]
+CMD ["sh", "-c", "uvicorn", "api.app:app", "--host", "${API_HOST}", "--port", "${API_PORT}", "--log-level", "info"]
