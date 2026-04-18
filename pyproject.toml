@@ -19,7 +19,9 @@ dependencies = [
 # Sibling `drone-sim/` Mesa model + `/world/mesa/*` HTTP routes
 mesa = [
     "mesa>=3.0.3",
+    "networkx>=3.2",
     "numpy>=1.26.0",
+    "pyzmq>=26.0.0",
     "scipy>=1.13.0",
 ]
 
