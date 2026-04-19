@@ -466,9 +466,27 @@ def route_after_execution(state: SwarmState) -> str:
     if "[ERROR]" in last_log or "Error" in last_log or "Jitter" in last_log:
         return "recovery_node"
         
-    # 2. Check if all tasks complete
-    if all(scanned for scanned in state.get("search_grid", {}).values()):
-        return END
+    # 2. Check if all tasks complete (Search + Rescue)
+    search_grid = state.get("search_grid", {})
+    # MUST have scanned all sectors defined in PRIORITY_MAP (prevents early exit on empty grid)
+    search_complete = len(search_grid) >= len(PRIORITY_MAP) and all(search_grid.values())
+    
+    # Are there any detected survivors who haven't been rescued yet?
+    # In our state-machine, detected_survivors ONLY contains pending cases.
+    rescue_pending = state.get("detected_survivors", [])
+    
+    if search_complete:
+        if not rescue_pending:
+            state["mission_log"].append("[SYSTEM] MISSION SUCCESS: All sectors cleared and all detected lives saved.")
+            return END
+        else:
+            # ── Anti-spam guard: only log once per phase transition, not every cycle ──
+            recent_logs = state["mission_log"][-6:]
+            if not any("SEARCH COMPLETE" in l for l in recent_logs):
+                state["mission_log"].append(
+                    f"[SYSTEM] SEARCH COMPLETE: All sectors scanned, but {len(rescue_pending)} "
+                    f"survivors still await rescue/supply."
+                )
         
     return "commander_node"
 
