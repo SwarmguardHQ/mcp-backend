@@ -16,8 +16,8 @@ API_PORT: int = int(os.getenv("API_PORT", "8000"))
 # ── Grid world ────────────────────────────────────────────────────────────────
 GRID_SIZE: int = 20                 # 20 × 20 cells
 BATTERY_COST_PER_CELL: float = 3.0  # % per grid unit of distance
-BATTERY_RESERVE_MIN: int = 15       # always keep this % before committing a move
-BATTERY_LOW_THRESHOLD: int = 20     # trigger return-to-charge warning
+BATTERY_RESERVE_MIN: int = 25       # always keep this % before committing a move
+BATTERY_LOW_THRESHOLD: int = 25     # trigger return-to-charge warning
 BATTERY_CRITICAL_THRESHOLD: int = 10  # immediate recall
 
 THERMAL_SCAN_RADIUS: float = 1.5    # cells

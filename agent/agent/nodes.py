@@ -9,6 +9,11 @@ from langgraph.graph import END
 from .state import SwarmState, AgentOutput
 from .mcp.client import mcp_client
 from .utils import get_distance, SIREN_COMMANDER_PERSONA, PRIORITY_MAP
+from utils.config import (
+    BATTERY_COST_PER_CELL,
+    BATTERY_RESERVE_MIN,
+    BATTERY_LOW_THRESHOLD,
+)
 
 async def thinking_node(state: SwarmState) -> SwarmState:
     """Provides intermediate feedback for better streaming."""
@@ -121,7 +126,7 @@ async def tool_execution_node(state: SwarmState) -> SwarmState:
         
         # Action routing
 
-        # 1. Relay Guard: Block unlock_drone on active relay drones
+        # 1. Unlock Drone Guard: Block unlock_drone on active relay drones
         # The LLM can reach unlock_drone as a raw MCP tool. Unlocking a relay
         # drone while its main drone is still > 5 cells from base would silently
         # break the mesh link. We intercept here and demand the main drone flies
@@ -158,6 +163,7 @@ async def tool_execution_node(state: SwarmState) -> SwarmState:
             )
             return state
 
+        # 3. Move Guard: Block move_to on active relay drones
         if tool_name == "move_to":
             drone_id = params.get("drone_id")
             target_x = params.get("x", 0)
@@ -167,15 +173,12 @@ async def tool_execution_node(state: SwarmState) -> SwarmState:
             drone = next((drone for drone in state["drones"] if drone["id"] == drone_id), None)
             
             if drone:
-                # ── 1. Persistent Relay Rule ──────────────────────────────────
+                # 3a. Persistent Relay Rule
                 # If this drone is currently serving as a relay for another drone, 
                 # it is locked in place unless a "Handover" drone is available.
                 if "active_relays" in state and drone_id in state["active_relays"].values():
-                    handover_partner = next(
-                        (d for d in state["drones"] 
-                         if d["id"] != drone_id and d["x"] == drone["x"] and d["y"] == drone["y"] and d.get("status") == "idle"), 
-                        None
-                    )
+                    # See if any available drones are at the same location for handing over
+                    handover_partner = next((d for d in state["drones"] if d["id"] != drone_id and d["x"] == drone["x"] and d["y"] == drone["y"] and d.get("status") == "idle" and not d.get("payload")), None)
                     
                     if handover_partner:
                         state["mission_log"].append(f"[SYSTEM] RELAY HANDOVER: {handover_partner['id']} taking over for {drone_id}.")
@@ -198,16 +201,16 @@ async def tool_execution_node(state: SwarmState) -> SwarmState:
                         state["mission_log"].append(f"[SYSTEM ERROR] PERSISTENT RELAY: {drone_id} is locked to maintain mesh connectivity.")
                         return state  # Block the move entirely
                 
-                # ── 2. Battery Rule Override ──────────────────────────────────
+                # 3b. Battery Rule Override
                 battery_override_active = False
-                if drone["battery"] < 20:
-                    state["mission_log"].append(f"[SYSTEM] BATTERY RULE: {drone_id} battery < 20. Switching to return_to_charging_station.")
+                if drone["battery"] < BATTERY_LOW_THRESHOLD:
+                    state["mission_log"].append(f"[SYSTEM] BATTERY RULE: {drone_id} battery < {BATTERY_LOW_THRESHOLD}%. Switching to return_to_charging_station.")
                     # Override name and params to use specialized safety tool
                     tool_name = "return_to_charging_station"
                     params = {"drone_id": drone_id}
                     battery_override_active = True
                 
-                # ── 3. Relay Rule Override ────────────────────────────────────
+                # 3c. Relay Rule Override
                 # Skip if the battery override is active — no relay needed for a return-to-base trip.
                 if not battery_override_active:
                     distance = get_distance(drone["x"], drone["y"], target_x, target_y)
@@ -219,9 +222,9 @@ async def tool_execution_node(state: SwarmState) -> SwarmState:
                         mid_x = int((drone["x"] + target_x) / 2)
                         mid_y = int((drone["y"] + target_y) / 2)
                         
-                        # ── 3a. Shared Relay Check ────────────────────────────
+                        # ── Shared Relay Check ─────────────
                         # Is there ANY drone already at this exact midpoint?
-                        existing_relay = next((d for d in state["drones"] if d["id"] != drone_id and d["x"] == mid_x and d["y"] == mid_y), None)
+                        existing_relay = next((d for d in state["drones"] if d["id"] != drone_id and d["x"] == mid_x and d["y"] == mid_y and not d.get("payload")), None)
                         
                         if existing_relay:
                             state["mission_log"].append(f"[SYSTEM] RELAY RULE: Utilizing existing drone {existing_relay['id']} at ({mid_x}, {mid_y}) as shared relay.")
@@ -231,10 +234,22 @@ async def tool_execution_node(state: SwarmState) -> SwarmState:
                         else:
                             state["mission_log"].append(f"[SYSTEM] RELAY RULE: Target > 5 cells. Deploying relay drone at midpoint ({mid_x}, {mid_y}).")
                             
-                            # ── 3b. Lowest Battery Heuristic ──────────────────────
+                            # 3c1. Lowest Battery Heuristic
+                            # Do NOT require status=="idle" — state is stale (only the
+                            # commanded drone gets synced). Drones auto-transition to idle
+                            # on the server after 5s, so "flying" in state is safe to use.
+                            # Only exclude truly unavailable states: offline / charging.
+                            # Also verify the candidate can actually afford the midpoint trip
+                            # (same cost model as the simulator: 3% per cell + 25% reserve).
                             idle_drones = [
                                 d for d in state["drones"] 
-                                if d["id"] != drone_id and d.get("status") == "idle" and d.get("battery", 0) >= 25
+                                if d["id"] != drone_id
+                                and not d.get("locked", False)
+                                and d.get("status") not in ("offline", "charging")
+                                and not d.get("payload")
+                                and d.get("battery", 0) >= int(
+                                    get_distance(d["x"], d["y"], mid_x, mid_y) * BATTERY_COST_PER_CELL
+                                ) + BATTERY_RESERVE_MIN
                             ]
                             
                             relay_drone = min(idle_drones, key=lambda d: d.get("battery", 100)) if idle_drones else None
