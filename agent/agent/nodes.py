@@ -285,30 +285,100 @@ async def tool_execution_node(state: SwarmState) -> SwarmState:
         
         # Authoritative Base-Station Synchronization:
         # We secretly pull fresh telemetry from the MCP Physics Simulator in the background here.
-        # This keeps the AI's SwarmState perfectly accurate without forcing the AI to waste 
-        # API tokens/turns explicitly asking for battery updates.
-        drone_id = params.get("drone_id")
-        if drone_id and "error" not in res_text.lower():
+        if "error" not in res_text.lower():
             try:
-                import json
-                sync_res = await mcp_client.session.call_tool("get_drone_status", {"drone_id": drone_id})
-                sync_data = json.loads(sync_res.content[0].text)
-                
-                drone = next((drone for drone in state["drones"] if drone["id"] == drone_id), None)
-                if drone and "error" not in sync_data:
-                    drone["battery"] = sync_data.get("battery", drone["battery"])
+                # 1. Drone Hardware Sync
+                drone_id = params.get("drone_id")
+                if drone_id:
+                    sync_res = await mcp_client.session.call_tool("get_drone_status", {"drone_id": drone_id})
+                    sync_data = json.loads(sync_res.content[0].text)
                     
-                    # Do NOT overwrite status if this drone is acting as a relay.
-                    # The MCP server doesn't know about "relay" status — it would return
-                    # "idle" or "flying", which would silently break the persistent relay lock.
-                    is_relay = drone["id"] in state.get("active_relays", {}).values()
-                    if not is_relay:
-                        drone["status"] = sync_data.get("status", drone["status"])
-                    
-                    position = sync_data.get("position", {})
-                    drone["x"] = position.get("x", drone["x"])
-                    drone["y"] = position.get("y", drone["y"])
-                    drone["locked"] = sync_data.get("locked", drone["locked"])
+                    drone = next((drone for drone in state["drones"] if drone["id"] == drone_id), None)
+                    if drone and "error" not in sync_data:
+                        drone["battery"] = sync_data.get("battery", drone["battery"])
+                        drone["payload"] = sync_data.get("payload", drone.get("payload"))  # MCP is truth
+                        
+                        # Do NOT overwrite status if this drone is acting as a relay.
+                        is_relay = drone["id"] in state.get("active_relays", {}).values()
+                        if not is_relay:
+                            drone["status"] = sync_data.get("status", drone["status"])
+                        
+                        position = sync_data.get("position", {})
+                        drone["x"] = position.get("x", drone["x"])
+                        drone["y"] = position.get("y", drone["y"])
+                        drone["locked"] = sync_data.get("locked", drone["locked"])
+
+                # 2. Mission State Sync (Ground Truth)
+                summary_res = await mcp_client.session.call_tool("get_swarm_summary", {})
+                summary_data = json.loads(summary_res.content[0].text)
+                if "error" not in summary_data:
+                    survivor_info = summary_data.get("survivors", {})
+                    # 'pending' list now contains full objects (id, x, y, condition)
+                    state["detected_survivors"] = survivor_info.get("pending", [])
+                    state["rescued_survivors"] = survivor_info.get("rescued_ids", [])
+
+            except Exception:
+                pass
+
+        # Auto-Deliver Heuristic
+        # If the commanded drone (after any move) is carrying a payload AND is
+        # within delivery range (≤ 1.5 cells) of a pending survivor, auto-call
+        # deliver_supplies immediately — bypassing the LLM entirely.
+        # This prevents the LLM from ignoring the PAYLOAD ALERT due to low-battery
+        # anxiety or other distractions (as seen when ECHO was at S4 with a kit).
+        if tool_name == "move_to" and "error" not in res_text.lower():
+            moved_id = params.get("drone_id")
+            moved_drone = next((d for d in state["drones"] if d["id"] == moved_id), None)
+            if moved_drone and moved_drone.get("payload"):
+                for survivor in state.get("detected_survivors", []):
+                    dist = get_distance(moved_drone["x"], moved_drone["y"], survivor["x"], survivor["y"])
+                    if dist <= 1.5:
+                        try:
+                            state["mission_log"].append(
+                                f"[SYSTEM] AUTO-DELIVER: {moved_id} is at ({moved_drone['x']},{moved_drone['y']}) "
+                                f"with '{moved_drone['payload']}' — auto-delivering to {survivor['id']} "
+                                f"at ({survivor['x']},{survivor['y']})."
+                            )
+                            deliver_res = await mcp_client.session.call_tool(
+                                "deliver_supplies", {"drone_id": moved_id, "survivor_id": survivor["id"]}
+                            )
+                            deliver_text = deliver_res.content[0].text
+                            state["mission_log"].append(f"[MCP] {deliver_text}")
+                            # Clear the payload from state immediately
+                            moved_drone["payload"] = None
+                            # Refresh survivor list from ground truth
+                            summary_res = await mcp_client.session.call_tool("get_swarm_summary", {})
+                            summary_data = json.loads(summary_res.content[0].text)
+                            if "error" not in summary_data:
+                                survivor_info = summary_data.get("survivors", {})
+                                state["detected_survivors"] = survivor_info.get("pending", [])
+                                state["rescued_survivors"] = survivor_info.get("rescued_ids", [])
+                        except Exception as e:
+                            state["mission_log"].append(f"[SYSTEM ERROR] Auto-deliver failed: {e}")
+                        break  # Only deliver to the first match per move
+
+        # These tool calls return fresh telemetry for ALL drones, but previously
+        # we only logged the result without updating state. Now we parse and
+        # refresh every drone's battery / position / status so the relay filter
+        # and PAYLOAD ALERT block always work from current data.
+        if tool_name in ["discover_drones", "get_all_drone_statuses"]:
+            try:
+                fleet_data = json.loads(res_text)
+                # discover_drones → "active_drones", get_all_drone_statuses → "drones"
+                drone_list = fleet_data.get("active_drones") or fleet_data.get("drones", [])
+                for d_data in drone_list:
+                    drone = next((d for d in state["drones"] if d["id"] == d_data.get("drone_id")), None)
+                    if drone:
+                        drone["battery"] = d_data.get("battery", drone["battery"])
+                        drone["payload"] = d_data.get("payload", drone.get("payload"))  # MCP is truth
+                        pos = d_data.get("position", {})
+                        drone["x"] = pos.get("x", drone["x"])
+                        drone["y"] = pos.get("y", drone["y"])
+                        drone["locked"] = d_data.get("locked", drone["locked"])
+                        # Only update status if the drone is NOT acting as a relay
+                        is_relay = drone["id"] in state.get("active_relays", {}).values()
+                        if not is_relay:
+                            drone["status"] = d_data.get("status", drone["status"])
             except Exception:
                 pass
 
@@ -332,6 +402,33 @@ async def tool_execution_node(state: SwarmState) -> SwarmState:
                     state["search_grid"][target_sectors[0]] = True
                     state["mission_log"].append(f"[SYSTEM] Fallback heuristic: marked '{target_sectors[0]}' as scanned.")
 
+            # ── Immediate Detection Sync ──────────────────────────────────────
+            # Parse survivors_detected directly from the scan result so that
+            # state["detected_survivors"] is updated instantly (belt-and-suspenders
+            # alongside the get_swarm_summary reconciliation above).
+            try:
+                scan_data = json.loads(res_text)
+                newly_found = scan_data.get("survivors_detected", [])
+                if newly_found:
+                    existing_ids = {s["id"] for s in state.get("detected_survivors", [])}
+                    for s in newly_found:
+                        sid = s.get("survivor_id")
+                        if sid and sid not in existing_ids:
+                            state["detected_survivors"].append({
+                                "id":        sid,
+                                "x":         s["position"]["x"],
+                                "y":         s["position"]["y"],
+                                "condition": s.get("condition", "unknown"),
+                            })
+                            state["mission_log"].append(
+                                f"[SYSTEM] DETECTED: {sid} at "
+                                f"({s['position']['x']},{s['position']['y']}) "
+                                f"[{s.get('condition', '?').upper()}]"
+                            )
+            except Exception:
+                pass
+
+
         # ── 3. Auto-Release Logic ─────────────────────────────────────────────
         # If a drone that was using a relay flies back into the safe communication
         # range (distance <= 5 from base), the relay drone is automatically released.
@@ -346,7 +443,7 @@ async def tool_execution_node(state: SwarmState) -> SwarmState:
                         if relay_drone:
                             # UNLOCK THE RELAY ON THE SERVER
                             await mcp_client.session.call_tool("unlock_drone", {"drone_id": relay_id})
-                            relay_drone["status"] = "idle"
+                            relay_drone["locked"] = False
                             state["mission_log"].append(f"[SYSTEM] AUTO-RELEASE: Relay {relay_id} released (Signal link no longer needed).")
                         released_ids.append(main_id)
             
