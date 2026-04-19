@@ -63,8 +63,8 @@ async def list_tools() -> ListToolsResult:
                  "type": "object",
                  "properties": {
                      "drone_id": {"type": "string"},
-                     "x": {"type": "integer", "minimum": 0, "maximum": 9},
-                     "y": {"type": "integer", "minimum": 0, "maximum": 9},
+                     "x": {"type": "integer", "minimum": 0, "maximum": 19},
+                     "y": {"type": "integer", "minimum": 0, "maximum": 19},
                  },
                  "required": ["drone_id", "x", "y"],
              }),
