@@ -371,12 +371,20 @@ async def drone_agent_node(state: dict) -> dict:
             # Dynamically reposition existing relay
             existing_relay = active_relays[drone_id]
             try:
-                await mcp_client.session.call_tool(
+                await mcp_client.session.call_tool("unlock_drone", {"drone_id": existing_relay})
+                move_res = await mcp_client.session.call_tool(
                     "move_to", {"drone_id": existing_relay, "x": mid_x, "y": mid_y}
                 )
+                await mcp_client.session.call_tool("lock_drone", {"drone_id": existing_relay})
+                
+                res_text = move_res.content[0].text
+                if "error" in res_text.lower():
+                    raise RuntimeError(f"Relocate failed: {res_text}")
+                    
                 updates["mission_log"].append(
                     f"[{drone_id}] 📡 Relocated existing relay {existing_relay} to optimal midpoint ({mid_x},{mid_y})"
                 )
+                await mcp_client.step_sync()
             except Exception as e:
                 updates["mission_log"].append(f"[{drone_id}] ⚠️ Relay relocation failed: {e}")
         else:
@@ -759,12 +767,18 @@ async def rescue_execution_node(state: SwarmState) -> dict:
             if drone_id in active_relays:
                 existing_relay = active_relays[drone_id]
                 try:
-                    await mcp_client.session.call_tool(
+                    await mcp_client.session.call_tool("unlock_drone", {"drone_id": existing_relay})
+                    move_res = await mcp_client.session.call_tool(
                         "move_to", {"drone_id": existing_relay, "x": mid_x, "y": mid_y}
                     )
-                    updates["mission_log"].append(
-                        f"[RESCUE] 📡 Relocated existing Mesh Relay {existing_relay} to optimal midpoint ({mid_x},{mid_y})"
-                    )
+                    await mcp_client.session.call_tool("lock_drone", {"drone_id": existing_relay})
+                    
+                    res_text = move_res.content[0].text
+                    if "error" not in res_text.lower():
+                        updates["mission_log"].append(
+                            f"[RESCUE] 📡 Relocated existing Mesh Relay {existing_relay} to optimal midpoint ({mid_x},{mid_y})"
+                        )
+                        await mcp_client.step_sync()
                 except Exception as e:
                     pass
             else:
