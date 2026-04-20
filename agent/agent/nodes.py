@@ -747,8 +747,14 @@ async def rescue_execution_node(state: SwarmState) -> dict:
         )
 
         if max_dist_from_base > 10:
-            mid_x = int(survivor["x"] / 2)
-            mid_y = int(survivor["y"] / 2)
+            # Midpoint: halfway between the base station and the furthest destination.
+            # This places the relay where it can bridge the signal gap from home.
+            far_dest = max(
+                [(nearest_depot["x"], nearest_depot["y"]), (survivor["x"], survivor["y"])],
+                key=lambda p: get_distance(mcp_client.base_x, mcp_client.base_y, p[0], p[1])
+            )
+            mid_x = int((mcp_client.base_x + far_dest[0]) / 2)
+            mid_y = int((mcp_client.base_y + far_dest[1]) / 2)
             
             if drone_id in active_relays:
                 existing_relay = active_relays[drone_id]
