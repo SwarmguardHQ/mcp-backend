@@ -64,17 +64,20 @@ def return_to_charging_station(drone_id: str) -> dict:
     drone.battery -= cost
     drone.x, drone.y = station["x"], station["y"]
     drone.start_charging(station["id"])
+    # Auto-complete charging — parking at a station implies a full recharge (Swapping battery).
+    # Callers no longer need a separate charge_drone call.
+    drone.finish_charging(100)
     from mcp_server.mesa_bridge import notify_drone_changed
 
     notify_drone_changed(drone_id)
 
     return {
-        "drone_id":           drone_id,
-        "charging_station":   station["id"],
-        "position":           {"x": drone.x, "y": drone.y},
-        "battery_on_arrival": drone.battery,
-        "status":             "charging",
-        "note":               "Call charge_drone to restore battery, then drone returns to idle.",
+        "drone_id":         drone_id,
+        "charging_station": station["id"],
+        "position":         {"x": drone.x, "y": drone.y},
+        "battery":          drone.battery,
+        "status":           drone.status.value,
+        "note":             "Drone fully recharged and returned to idle.",
     }
 
 

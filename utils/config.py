@@ -16,8 +16,8 @@ API_PORT: int = int(os.getenv("API_PORT", "8000"))
 # ── Grid world ────────────────────────────────────────────────────────────────
 GRID_SIZE: int = 20                 # 20 × 20 cells
 BATTERY_COST_PER_CELL: float = 3.0  # % per grid unit of distance
-BATTERY_RESERVE_MIN: int = 15       # always keep this % before committing a move
-BATTERY_LOW_THRESHOLD: int = 20     # trigger return-to-charge warning
+BATTERY_RESERVE_MIN: int = 25       # always keep this % before committing a move
+BATTERY_LOW_THRESHOLD: int = 25     # trigger return-to-charge warning
 BATTERY_CRITICAL_THRESHOLD: int = 10  # immediate recall
 
 THERMAL_SCAN_RADIUS: float = 1.5    # cells
@@ -31,22 +31,22 @@ DRONE_RECOVERY_SUCCESS_RATE: float = 0.65  # 65 % chance per attempt
 
 # ── Charging stations ─────────────────────────────────────────────────────────
 CHARGING_STATIONS: list[dict] = [
-    {"id": "CS1", "x": 0, "y": 0},
-    {"id": "CS2", "x": 9, "y": 0},
+    {"id": "CS1", "x": 1, "y": 0},
+    {"id": "CS2", "x": 9, "y": 10},
 ]
 
 # ── Supply depots ─────────────────────────────────────────────────────────────
 SUPPLY_DEPOTS: list[dict] = [
     {
         "id": "D1",
-        "x": 0, "y": 0,
-        "supplies": ["medical_kit", "water", "food"],
+        "x": 0, "y": 1,
+        "supplies": ["medical_kit", "water", "food", "rope", "tarp", "radio"],
         "capacity": 50,
     },
     {
         "id": "D2",
-        "x": 9, "y": 9,
-        "supplies": ["rope", "tarp", "radio"],
+        "x": 6, "y": 12,
+        "supplies": ["medical_kit", "water", "food"],
         "capacity": 30,
     },
 ]

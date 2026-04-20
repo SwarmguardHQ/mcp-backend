@@ -41,6 +41,20 @@ async def list_tools() -> ListToolsResult:
                  },
                  "required": ["drone_id", "sector_label"],
              }),
+        Tool(name="lock_drone",
+             description="Operationally lock a drone in place (prevents movement).",
+             inputSchema={
+                 "type": "object",
+                 "properties": {"drone_id": {"type": "string"}},
+                 "required": ["drone_id"],
+             }),
+        Tool(name="unlock_drone",
+             description="Unlock a drone, allowing it to move again.",
+             inputSchema={
+                 "type": "object",
+                 "properties": {"drone_id": {"type": "string"}},
+                 "required": ["drone_id"],
+             }),
 
         # Movement
         Tool(name="move_to",
@@ -49,8 +63,8 @@ async def list_tools() -> ListToolsResult:
                  "type": "object",
                  "properties": {
                      "drone_id": {"type": "string"},
-                     "x": {"type": "integer", "minimum": 0, "maximum": 9},
-                     "y": {"type": "integer", "minimum": 0, "maximum": 9},
+                     "x": {"type": "integer", "minimum": 0, "maximum": 19},
+                     "y": {"type": "integer", "minimum": 0, "maximum": 19},
                  },
                  "required": ["drone_id", "x", "y"],
              }),
@@ -118,7 +132,7 @@ async def list_tools() -> ListToolsResult:
                  "required": ["drone_id", "supply_type"],
              }),
         Tool(name="deliver_supplies",
-             description="Deliver current payload to a survivor (drone must be within 1.5 cells).",
+             description="Deliver payload and mark survivor as RESCUED (Effective end of lifecycle for this target).",
              inputSchema={
                  "type": "object",
                  "properties": {
@@ -208,6 +222,8 @@ TOOL_MAP: dict[str, Any] = {
     "get_rescue_priority_list":   T.get_rescue_priority_list,
     "mark_survivor_rescued":      T.mark_survivor_rescued,
     "get_drone_status":           T.get_drone_status,
+    "lock_drone":                 D.lock_drone,
+    "unlock_drone":               D.unlock_drone,
     "get_swarm_summary":          T.get_swarm_summary,
     "get_mission_log":            T.get_mission_log,
     "broadcast_mesh_message":     T.broadcast_mesh_message,

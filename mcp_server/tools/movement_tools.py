@@ -19,6 +19,8 @@ def move_to(drone_id: str, x: int, y: int) -> dict:
         return {"error": "Drone is offline"}
     if drone.status == DroneStatus.CHARGING:
         return {"error": "Drone is charging — call charge_drone first to release it"}
+    if drone.locked:
+        return {"error": f"Drone {drone_id} is operationally LOCKED. Reason: Serving as critical relay or under system maintenance."}
 
     if not (0 <= x < GRID_SIZE and 0 <= y < GRID_SIZE):
         return {"error": f"Coordinates ({x},{y}) are outside the grid (0–{GRID_SIZE-1})"}

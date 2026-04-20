@@ -50,3 +50,23 @@ def assign_sector(drone_id: str, sector_label: str) -> dict:
     drone.assigned_sector = sector_label
     drone.log(f"Assigned sector: {sector_label}")
     return {"drone_id": drone_id, "assigned_sector": sector_label}
+
+
+def lock_drone(drone_id: str) -> dict:
+    """Operationally lock a drone (e.g., to serve as a relay)."""
+    drone = world.get_drone(drone_id)
+    if not drone:
+        return {"error": f"Drone {drone_id} not found"}
+    drone.locked = True
+    drone.log("Drone LOCKED by command.")
+    return {"drone_id": drone_id, "locked": True}
+
+
+def unlock_drone(drone_id: str) -> dict:
+    """Release a drone from its operational lock."""
+    drone = world.get_drone(drone_id)
+    if not drone:
+        return {"error": f"Drone {drone_id} not found"}
+    drone.locked = False
+    drone.log("Drone UNLOCKED by command.")
+    return {"drone_id": drone_id, "locked": False}
