@@ -797,7 +797,11 @@ async def rescue_execution_node(state: SwarmState) -> dict:
                     except Exception as e:
                         updates["mission_log"].append(f"[RESCUE] ⚠️ Relay deploy failed: {e}")
                 else:
-                    updates["mission_log"].append(f"[RESCUE] ⚠️ No relay available for {max_dist_from_base:.1f}-cell trip! Aborting.")
+                    updates["mission_log"].append(
+                        f"[RESCUE] ⚠️ No relay available for {max_dist_from_base:.1f}-cell trip to "
+                        f"{survivor_id}! All idle drones either lack battery or are already deployed. "
+                        f"Directive dropped — Strategist should try a different drone or wait for recharge."
+                    )
                     return updates
 
         # ── 2. Move to depot ───────────────────────────────────────────────────
