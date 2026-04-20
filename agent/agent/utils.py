@@ -2,7 +2,7 @@
 Shared utilities for the SIREN swarm agent.
 
   - assign_sectors_to_drones():     pure-Python Pythagorean assignment
-  - compute_drone_sector_cost():    distance / battery cost metric
+  - _compute_drone_sector_cost():    distance / battery cost metric
   - estimate_signal():              signal-strength heuristic by distance from base
   - build_strategist_context():     formats the LLM prompt for strategist_node
 """
@@ -83,7 +83,7 @@ def get_distance(x1: float, y1: float, x2: float, y2: float) -> float:
     return math.sqrt((x2 - x1) ** 2 + (y2 - y1) ** 2)
 
 
-def compute_drone_sector_cost(drone: dict, sector_id: str) -> float:
+def _compute_drone_sector_cost(drone: dict, sector_id: str) -> float:
     """
     Cost metric for assigning this drone to this sector.
     Cost = distance / battery  (lower is better — fast + full beats slow + empty).
@@ -155,7 +155,7 @@ def assign_sectors_to_drones(
             break
 
         # The drone that can reach this sector most cheaply wins the claim
-        best_drone = min(remaining, key=lambda d: compute_drone_sector_cost(d, sector_id))
+        best_drone = min(remaining, key=lambda d: _compute_drone_sector_cost(d, sector_id))
         
         # ── Dynamic Relay Check ──
         data = priority_map.get(sector_id, {})
