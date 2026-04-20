@@ -13,14 +13,15 @@ class AgentOutput(BaseModel):
     tool_call: ToolCall = Field(description="The tool call to make")
 
 class Drone(TypedDict):
-    """Represents the live telemetry of an individual drone."""
+    """Live telemetry snapshot for one physical drone."""
     id: str
     battery: int
     x: int
     y: int
     status: str
     locked: bool
-    payload: Optional[str]   # None when empty, supply name when carrying
+    payload: Optional[str]
+
 
 class SwarmState(TypedDict):
     """
