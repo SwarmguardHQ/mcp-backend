@@ -114,12 +114,18 @@ def _merge_drones(old: List[Dict], new: List[Dict]) -> List[Dict]:
     return list(merged.values())
 
 
-def _merge_active_relays(old: Dict[str, str], new: Dict[str, str]) -> Dict[str, str]:
+def _merge_active_relays(old: Dict[str, str], new: Dict[str, Optional[str]]) -> Dict[str, str]:
     """
     Merge relay maps — each drone only writes its own main-drone key,
-    so conflicts are impossible.  Deletions pass through via join_node.
+    so conflicts are impossible. Deletions use None as a sentinel value.
     """
-    return {**old, **new}
+    merged = {**old}
+    for k, v in new.items():
+        if v is None:
+            merged.pop(k, None)
+        else:
+            merged[k] = v
+    return merged
 
 
 def _merge_signal_map(old: Dict[str, float], new: Dict[str, float]) -> Dict[str, float]:

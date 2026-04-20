@@ -578,8 +578,10 @@ async def drone_agent_node(state: dict) -> dict:
             relay_id = active_relays[drone_id]
             try:
                 await mcp_client.session.call_tool("unlock_drone", {"drone_id": relay_id})
-                new_relays = {k: v for k, v in active_relays.items() if k != drone_id}
-                updates["active_relays"] = new_relays
+                # Use `None` as a sentinel value to instruct the LangGraph reducer
+                # (_merge_active_relays) to permanently delete this key from SwarmState.
+                # If we simply omit the key, the reducer will merge the old state right back in.
+                updates["active_relays"] = {drone_id: None}
                 updates["mission_log"].append(
                     f"[{drone_id}] 🔓 AUTO-RELEASE: Relay {relay_id} freed "
                     f"(main drone within 10 cells of base)."
@@ -622,12 +624,12 @@ async def join_node(state: SwarmState) -> dict:
                         f"[JOIN] 🔓 Relay {relay_id} auto-released — "
                         f"{main_id} is within 10 cells of base."
                     )
-                    del released_relays[main_id]
+                    # Use `None` as a sentinel value to tell the reducer to delete this mapping
+                    if "active_relays" not in updates:
+                        updates["active_relays"] = {}
+                    updates["active_relays"][main_id] = None
                 except Exception as e:
                     updates["mission_log"].append(f"[JOIN] Relay release error: {e}")
-
-    if released_relays != active_relays:
-        updates["active_relays"] = released_relays
 
     # ── Authoritative survivor sync from MCP ──────────────────────────────────
     try:
