@@ -108,9 +108,9 @@ class WorldState:
         from mcp_server.drone_simulator import DroneStatus
         grid = [["." for _ in range(self.grid_size)] for _ in range(self.grid_size)]
         for depot in self.supply_depots:
-            grid[depot["y"]][depot["x"]] = "D"
+            grid[depot["y"]][depot["x"]] = "DS"
         for cs in self.charging_stations:
-            grid[cs["y"]][cs["x"]] = "C"
+            grid[cs["y"]][cs["x"]] = "CS"
         for s in self.survivors.values():
             if not s.rescued:
                 grid[s.y][s.x] = "!" if s.condition == "critical" else "?"
@@ -122,9 +122,59 @@ class WorldState:
             rows.append(str(self.grid_size - 1 - i) + " " + "".join(row))
         legend = (
             "Legend: A/B/C/D/E=Drones  !=Critical  ?=Survivor  "
-            "D=Supply depot  C=Charging station  .=Empty"
+            "DS=Supply depot  CS=Charging station  .=Empty"
         )
         return "\n".join(rows) + "\n" + legend
+
+    def reinitialize(self, scenario_name: str) -> None:
+        """
+        Dynamically re-syncs the WorldState singleton to a specific scenario configuration.
+        This is critical for ensuring the dashboard displays the correct INITIAL_FLEET 
+        and INITIAL_SURVIVORS for each mission.
+        """
+        import importlib
+        try:
+            # 1. Load the specific scenario module
+            mod = importlib.import_module(f"scenarios.{scenario_name}")
+            fleet = getattr(mod, "INITIAL_FLEET", [])
+            survivors = getattr(mod, "INITIAL_SURVIVORS", [])
+
+            # 2. Reset the live state
+            self.explored_cells = set()
+            self.drones = {
+                cfg["id"]: Drone(
+                    drone_id=cfg["id"],
+                    x=cfg["x"],
+                    y=cfg["y"],
+                    battery=cfg["battery"],
+                    offline=cfg.get("offline", False),
+                )
+                for cfg in fleet
+            }
+            self.survivors = {
+                cfg["id"]: Survivor(
+                    survivor_id=cfg["id"],
+                    x=cfg["x"],
+                    y=cfg["y"],
+                    condition=cfg["condition"],
+                )
+                for cfg in survivors
+            }
+
+            # 3. Mark starting positions as explored
+            for cfg in fleet:
+                self._mark_cell(int(cfg["x"]), int(cfg["y"]))
+            
+            # 4. Sync sub-systems if available
+            try:
+                from mcp_server import mesa_bridge
+                mesa_bridge.rebuild_mesa_after_world_reset()
+            except ImportError:
+                pass
+
+        except Exception as e:
+            print(f"Warning: Failed to reinitialize world for '{scenario_name}', using default reset. Error: {e}")
+            self._reset()
 
 
 world = WorldState()

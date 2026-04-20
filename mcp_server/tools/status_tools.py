@@ -31,7 +31,8 @@ def get_swarm_summary() -> dict:
     """High-level swarm health — useful for the agent's periodic check-ins."""
     from mcp_server.drone_simulator import DroneStatus
     drones = list(world.drones.values())
-    survivors = list(world.survivors.values())
+    # Only pull survivors the swarm has officially detected - NO CHEAT
+    survivors = [s for s in world.survivors.values() if s.detected]
 
     return {
         "drones": {
@@ -46,14 +47,18 @@ def get_swarm_summary() -> dict:
             ],
         },
         "survivors": {
-            "total":      len(survivors),
-            "detected":   sum(1 for s in survivors if s.detected),
-            "rescued":    sum(1 for s in survivors if s.rescued),
-            "critical_unrescued": sum(
-                1 for s in survivors if s.condition == "critical" and not s.rescued
-            ),
+            # 'pending' provides authoritative coordinates and medical context
+            "pending": [
+                {"id": s.survivor_id, "x": s.x, "y": s.y, "condition": s.condition}
+                for s in survivors if not s.rescued
+            ],
+            "rescued_ids":  [s.survivor_id for s in survivors if s.rescued],
+            "counts": {
+                "detected_total": len(survivors),
+                "rescued_total":  sum(1 for s in survivors if s.rescued),
+                "active_critical": sum(1 for s in survivors if s.condition == "critical" and not s.rescued),
+            }
         },
-        "mission_complete": all(s.rescued for s in survivors),
     }
 
 
