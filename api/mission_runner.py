@@ -109,22 +109,43 @@ class MissionRunner:
                     "x":       drone["x"],
                     "y":       drone["y"],
                     "status":  "offline" if drone.get("offline") else "idle",
+                    "locked":  drone.get("locked", False),
+                    "payload": drone.get("payload"),
                 }
                 for drone in fleet
             ]
+
+            # ── Seed the pheromone grid from PRIORITY_MAP ──────────────────────
+            # priority_rank_to_float converts rank (1=most urgent) → GridCell
+            # priority float (higher = stronger pheromone).
+            # Pre-scanned sectors (sector_2, sector_4 in default scenario) are
+            # seeded at priority=0.0 with scanned=True so drones skip them.
+            from agent.utils import PRIORITY_MAP, priority_rank_to_float
+
+            # Sectors that are pre-scanned in this scenario
+            PRESCANNED_SECTORS = {"sector_2", "sector_4"}
+
+            initial_search_grid = {
+                sid: {
+                    "priority":   0.0 if sid in PRESCANNED_SECTORS
+                                  else priority_rank_to_float(data["priority"]),
+                    "claimed_by": None,
+                    "scanned":    sid in PRESCANNED_SECTORS,
+                }
+                for sid, data in PRIORITY_MAP.items()
+            }
+
             initial_state = SwarmState(
                 drones=agent_drones,
                 mission_log=[],
-                search_grid={
-                    "sector_1": False,
-                    "sector_2": True,
-                    "sector_3": False,
-                    "sector_4": True,
-                    "sector_5": False,
-                },
+                search_grid=initial_search_grid,
+                signal_map={},
                 active_relays={},
-                next_action=None,
+                rescue_directive=None,
                 mission_prompt=prompt,
+                detected_survivors=[],
+                rescued_survivors=[],
+                phase="search",
             )
 
             # ── 2. Sync Local World Tracking ────────────────────────────────────
@@ -149,46 +170,80 @@ class MissionRunner:
                     await session.initialize()
                     mcp_client.set_session(session)
 
-                    # ── 3. Run the LangGraph agent ──────────────────────────────
-                    print(f"\n🚀 MISSION {state.mission_id} STARTED — Running LangGraph swarm controller...")
+                    # ── 3. Wire the per-step world sync callback ─────────────────
+                    # Nodes call `await mcp_client.step_sync()` after every single
+                    # MCP tool call (move, scan, collect, deliver).  This callback
+                    # immediately pulls get_world_state, syncs local_world, emits a
+                    # world_sync SSE event, then sleeps briefly so the frontend
+                    # animation can render the position update before the next action.
+                    async def _step_sync_callback() -> None:
+                        try:
+                            snap = await session.call_tool("get_world_state", {})
+                            if not snap.isError:
+                                _sync_local_world(snap.content[0].text)
+                                await _broadcast(state, {"type": "world_sync"})
+                        except Exception:
+                            pass
+                        # Pause so the frontend has time to animate the change
+                        # before the next MCP call fires inside the same node.
+                        await asyncio.sleep(0.5)
+
+                    mcp_client._on_step_complete = _step_sync_callback
+
+                    # ── 4. Run the LangGraph agent ──────────────────────────────
+                    print(f"\n MISSION {state.mission_id} STARTED — Running LangGraph swarm controller...")
                     app = create_graph()
-                    log_index = 0
 
                     await _broadcast(state, {"type": "log", "message": "SIREN ONLINE — LangGraph swarm controller initialised."})
 
-                    async for event in app.astream(initial_state, {"recursion_limit": 200}):
-                        for node_name, state_update in event.items():
 
-                            if "mission_log" not in state_update:
-                                # Node transition with no new log entries — emit a lightweight notice
-                                await _broadcast(state, {"type": "log", "message": f"Graph entered node: {node_name}"})
-                                continue
+                    # Background poller — kept as a 3 s safety‑net in case step_sync
+                    # is not called (e.g., during a long LLM call with no MCP action).
+                    poller = asyncio.create_task(
+                        _world_state_poller(session, state, interval=3.0)
+                    )
 
-                            # Emit each new log entry as a SSE step event
-                            new_logs = state_update["mission_log"][log_index:]
-                            for log_msg in new_logs:
-                                state.step_count += 1
-                                # print(f"  🤖 AGENT [{node_name}]: {log_msg}")
+                    try:
+                        async for event in app.astream(initial_state, {"recursion_limit": 200}):
+                            for node_name, state_update in event.items():
 
-                                ui_tool = _classify_tool(log_msg, node_name)
-                                await _broadcast(state, {
-                                    "type":           "step",
-                                    "phase":          node_name,
-                                    "reasoning":      log_msg,
-                                    "tool":           ui_tool,
-                                    "result_summary": "success",
-                                })
-                                await asyncio.sleep(0.4)  # Pacing for live-feed feel
+                                if "mission_log" not in state_update:
+                                    # Node transition with no new log entries — emit a lightweight notice
+                                    await _broadcast(state, {"type": "log", "message": f"Graph entered node: {node_name}"})
+                                    continue
 
-                            # Sync world state to the dashboard after each agent step
-                            try:
-                                snap = await session.call_tool("get_world_state", {})
-                                if not snap.isError:
-                                    _sync_local_world(snap.content[0].text)
-                            except Exception:
-                                pass
+                                # Emit each new log entry as a SSE step event
+                                for log_msg in state_update["mission_log"]:
+                                    state.step_count += 1
 
-                            log_index = len(state_update["mission_log"])
+                                    ui_tool = _classify_tool(log_msg, node_name)
+                                    await _broadcast(state, {
+                                        "type":           "step",
+                                        "phase":          node_name,
+                                        "reasoning":      log_msg,
+                                        "tool":           ui_tool,
+                                        "result_summary": "success",
+                                    })
+                                    await asyncio.sleep(0.4)  # Pacing for live-feed feel
+
+                                # Sync world state after each node completes (belt-and-braces;
+                                # the background poller already does this continuously).
+                                try:
+                                    snap = await session.call_tool("get_world_state", {})
+                                    if not snap.isError:
+                                        _sync_local_world(snap.content[0].text)
+                                        await _broadcast(state, {"type": "world_sync"})
+                                except Exception:
+                                    pass
+
+                    finally:
+
+                        # Always cancel the poller when the graph finishes or errors.
+                        poller.cancel()
+                        try:
+                            await poller
+                        except asyncio.CancelledError:
+                            pass
 
             # ── 4. Mission complete ─────────────────────────────────────────────
             state.status = "complete"
@@ -206,6 +261,39 @@ class MissionRunner:
 
 # ── Helpers ─────────────────────────────────────────────────────────────────────
 
+async def _world_state_poller(session, mission_state: MissionState, interval: float = 1.5) -> None:
+    """
+    Background task — polls MCP for live drone positions while LangGraph runs.
+
+    WHY THIS IS NEEDED:
+      During a parallel Send wave, all drone_agent_node coroutines execute their
+      move_to / thermal_scan MCP calls concurrently INSIDE asyncio sub-tasks.
+      LangGraph only emits an astream event AFTER the entire parallel batch
+      completes. Without a poller, the frontend receives all position updates in
+      one simultaneous burst (a "teleport" effect).
+
+      This task runs every `interval` seconds independently of the graph,
+      syncing local_world for the /world_state endpoint and emitting a
+      lightweight `world_sync` SSE event so connected frontends can re-fetch
+      smoothly. Result: drones appear to move progressively in ~1.5 s increments.
+
+    CONCURRENCY SAFETY:
+      MCP stdio transport is JSON-RPC with per-request IDs — concurrent calls
+      from the poller and the astream loop are multiplexed safely by the protocol.
+    """
+    while True:
+        await asyncio.sleep(interval)
+        try:
+            snap = await session.call_tool("get_world_state", {})
+            if not snap.isError:
+                _sync_local_world(snap.content[0].text)
+                await _broadcast(mission_state, {"type": "world_sync"})
+        except asyncio.CancelledError:
+            raise   # let the task end cleanly
+        except Exception:
+            pass    # non-fatal — next tick will retry
+
+
 async def _broadcast(state: MissionState, event: dict) -> None:
     """Append an event to the persistent history and push it to all active SSE subscribers."""
     state.history.append(event)
@@ -215,6 +303,23 @@ async def _broadcast(state: MissionState, event: dict) -> None:
 
 def _classify_tool(log_msg: str, node_name: str) -> str:
     """Derive a friendly UI tool label from the agent log message prefix."""
+    # New swarm architecture prefixes
+    if log_msg.startswith("[STRATEGIST]"):
+        return "strategist"
+    if log_msg.startswith("[DRONE"):
+        drone_id = log_msg.split("[")[1].split("]")[0]
+        return f"{drone_id.lower()}"
+    if log_msg.startswith("[RESCUE]"):
+        return "rescue_execution"
+    if log_msg.startswith("[GOVERNOR]"):
+        return "safety_governor"
+    if log_msg.startswith("[DISPATCH]"):
+        return "dispatch"
+    if log_msg.startswith("[JOIN]"):
+        return "join"
+    if log_msg.startswith("[RELAY]"):
+        return "relay"
+    # Legacy prefixes (kept for backward compat)
     if log_msg.startswith("[INTENT] "):
         return log_msg.split("[INTENT] ")[1].split(":")[0]
     if log_msg.startswith("[THOUGHT] "):

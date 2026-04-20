@@ -31,7 +31,7 @@ DRONE_RECOVERY_SUCCESS_RATE: float = 0.65  # 65 % chance per attempt
 
 # ── Charging stations ─────────────────────────────────────────────────────────
 CHARGING_STATIONS: list[dict] = [
-    {"id": "CS1", "x": 0, "y": 0},
+    {"id": "CS1", "x": 1, "y": 0},
     {"id": "CS2", "x": 9, "y": 10},
 ]
 

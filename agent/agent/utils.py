@@ -145,7 +145,7 @@ def assign_sectors_to_drones(
         and d.get("battery", 0) > BATTERY_RESERVE_MIN
     ]
 
-    assignments: Dict[str, str] = {}
+    assignments: Dict[str, str] = {} # {"drone_id": "sector_id"}
     taken_drones: set = set()
     skipped_logs: List[str] = []
 
@@ -160,11 +160,12 @@ def assign_sectors_to_drones(
         # ── Dynamic Relay Check ──
         data = priority_map.get(sector_id, {})
         sx, sy = data.get("x", 0), data.get("y", 0)
-        dist = get_distance(best_drone["x"], best_drone["y"], sx, sy)
+        from .mcp.client import mcp_client
+        dist_to_base = get_distance(sx, sy, mcp_client.base_x, mcp_client.base_y)
         
-        if dist > 10:
-            # We NEED a relay. Can we find one among the remaining drones?
-            # (Excluding the best_drone itself)
+        if dist_to_base > 10:
+            # We NEED a relay because the sector is too far from the base station signal.
+            # Can we find one among the remaining drones? (Excluding the best_drone itself)
             relay_pool = [d for d in remaining if d["id"] not in taken_drones and d["id"] != best_drone["id"]]
             if relay_pool:
                 # SUCCESS: Reserve both main drone and relay
@@ -222,6 +223,7 @@ def build_strategist_context(state: SwarmState) -> str:
 
     # ── Swarm positions (awareness only in search phase) ──────────────────────
     lines.append("\n### SWARM POSITIONS")
+    
     if phase == "search":
         lines.append("*(Drone positions shown for context — do NOT command them by name)*")
     for d in drones:
