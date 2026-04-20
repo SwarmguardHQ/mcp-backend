@@ -237,7 +237,7 @@ def build_strategist_context(state: SwarmState) -> str:
     # ── Recent significant events ──────────────────────────────────────────────
     significant = [
         l for l in mission_log[-30:]
-        if any(kw in l for kw in ("[DRONE:", "[RESCUE", "[GOVERNOR", "[RELAY", "DETECTED", "COMPLETE"))
+        if any(kw in l for kw in ("[DRONE_", "[RESCUE", "[GOVERNOR", "[RELAY", "DETECTED", "COMPLETE"))
     ]
     if significant:
         lines.append("\n### RECENT SCAN RESULTS & EVENTS")
@@ -283,7 +283,11 @@ def build_strategist_context(state: SwarmState) -> str:
                         flag = "LOW"
                     else:
                         flag = "FAIL"
-                    relay_tag = " [RELAY REQD]" if max(d_to_depot, depot_to_sur, get_distance(s["x"], s["y"], 0, 0)) > 10 else ""
+                    from .mcp.client import mcp_client as _mc
+                    relay_tag = " [RELAY REQD]" if max(
+                        get_distance(_mc.base_x, _mc.base_y, nearest_depot[0], nearest_depot[1]),
+                        get_distance(_mc.base_x, _mc.base_y, s["x"], s["y"])
+                    ) > 10 else ""
                     row.append(f"{d['id']}:{have}%/need{needed}%={flag}{relay_tag}")
                 lines.append("  " + "  ".join(row))
         else:
