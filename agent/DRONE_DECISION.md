@@ -1,200 +1,245 @@
-# AETHER Swarm Commander — Drone Decision & Automation Logic
+# SIREN Swarm Controller — Drone Decision & Automation Logic
 
-This document outlines how the LangGraph swarm controller and the underlying Python execution environment make decisions regarding drone allocation, relay deployment, and task execution.
+This document explains how the **SIREN True Swarm Intelligence** system makes decisions, deploys relays, and transitions mission phases.
 
-The system uses a **hybrid decision model**: 
-1. **The LLM (LangGraph Commander)** handles high-level strategic reasoning, sector assignment, and logistics planning based on the `SIREN_COMMANDER_PERSONA` prompt.
-2. **The System Code (`nodes.py`)** acts as the physics/logic engine, enforcing strict safety rules, overriding bad decisions, and automating tedious tasks (like relay deployments and handovers).
+The system uses a **strict separation of concerns** between two layers:
 
----
+| Layer | Component | Role |
+|---|---|---|
+| 🧠 **Environment Intelligence** | `strategist_node` (LLM) | Shapes the pheromone map. Never commands drones directly. |
+| ⚙️ **Local Autonomy** | `drone_agent_node` (Pure Python) | Reads pheromones, claims sectors, moves, scans, deploys relays. No LLM. |
 
-## 1. High-Level Drone Selection (The LLM)
-
-When the LLM decides to assign a task (scanning a sector or rescuing a survivor), it uses the following logic to pick a drone from the `get_all_drone_statuses` telemetry:
-
-*   **Eligibility Check:** The drone must be `idle` and its `locked` state must be `false`.
-*   **Search Phase Filtering:** In Phase 1, it picks drones based strictly on proximity to target high-priority sectors.
-*   **Rescue Phase Filtering:** 
-    1. **Payload Audit:** It first checks if any drone *already* has the required supply type (e.g., `medical_kit`) in its `payload`.
-    2. **Supply Chain Route:** If no drone has the supply, it maps distances from idle drones ➡️ Supply Depot ➡️ Survivor, and picks the drone with the shortest overall travel path.
-*   **Battery Considerations:** The LLM prompt encourages picking drones with high battery for long trips, though the System Code acts as a fail-safe.
+> The LLM does **not** issue `move_to` commands. It writes **priority signals** to a shared grid.  
+> The drones **read** those signals and **self-assign** sectors using local Pythagorean cost calculations.
 
 ---
 
-## 2. Relay Drone Deployment (System Automations)
+## 1. Pheromone-Guided Sector Assignment (ACO Pattern)
 
-The system automatically handles the "5-cell signal limit" to prevent the LLM from having to constantly micro-manage communication chains. 
+The SIREN search operates like an **Ant Colony Optimization** system:
 
-When the LLM issues a `move_to` command, the `tool_execution_node` intercepts it and evaluates the **Relay Rule**:
+### Strategist (Environment Writer)
+- Every cycle, the LLM Strategist reads the current swarm positions, scan progress, and survivor detections.
+- It outputs a `priority_updates` map: `{sector_id → float (0.0–10.0)}`.
+- Higher priority = stronger "pheromone" = drones will naturally swarm toward that sector.
+- **Hard rule**: The Strategist can NEVER boost an already-scanned sector (permanent lock at 0.0).
+- It never names a drone. It never issues a move command.
 
-1.  **Distance Calculation:** If the trip distance (`get_distance(drone.x, drone.y, target_x, target_y)`) exceeds **5 cells**, a relay is required.
-2.  **Midpoint Calculation:** The exact integer midpoint of the trip is calculated `(mid_x = int((x1+x2)/2), mid_y = int((y1+y2)/2))`.
-3.  **Shared Relay Check:** The system checks if **any other drone** is already sitting at the exact `(mid_x, mid_y)` coordinates. If so, it reuses that drone for the mesh link.
-4.  **Relay Candidate Selection:** If no drone is at the midpoint, the system searches the fleet for a candidate:
-    *   Must NOT be the moving drone.
-    *   Must NOT be locked.
-    *   Status must NOT be `offline` or `charging`.
-    *   Must NOT carry a payload (never strand a delivery drone).
-    *   Must have enough battery for the flight cost (3% per cell) + a 25% safety reserve.
-5.  **Lowest-Battery Heuristic:** From the eligible candidates, the system picks the drone with the **LOWEST** battery. This is a deliberate heuristic to keep the highest-battery drones free for primary search/rescue tasks, delegating stationary relay jobs to the most depleted drones.
-6.  **Locking:** The selected relay drone is flown to the midpoint, and the system issues a `lock_drone` command, placing it in the `active_relays` map so the LLM cannot accidentally move it away and sever the link.
+### Dispatch (Pure Python — Greedy ACO Assignment)
+The `dispatch_drones` function runs immediately after the Strategist writes pheromones:
 
----
+1. Collects all **unclaimed, unscanned** sectors with `priority > 0`.
+2. Sorts them **descending** by priority (strongest pheromone gets assigned first).
+3. For each sector, finds the **cheapest eligible idle drone** using the cost metric:
+   ```
+   cost = distance_to_sector / battery_level
+   ```
+   — A full battery drone close to the target wins. A depleted drone far away gets a huge cost penalty.
+4. **Relay Check at Assignment Time**: If `distance(sector_coords, base_station) > 10`, the algorithm also reserves a second idle drone as a relay. If no relay is available, the sector is **skipped with a log** (the Strategist sees this and adapts next cycle).
+5. The function returns a `list[Send]` — LangGraph uses this to **fan out all drone assignments in true parallel** via async sub-tasks.
 
-## 3. Relay Handover and Auto-Release (System Automations)
+### Drone Agent (Local Executor — No LLM)
+Each `drone_agent_node` receives its `drone_id` + `target_sector` and executes an 8-step pipeline:
 
-If a drone acts as a relay, it blocks other assignments. The system maintains mesh integrity using two automatic workflows:
+```
+CLAIM → BATTERY CHECK → RELAY DEPLOY → MOVE → SCAN → COMPLETE → TELEMETRY SYNC → AUTO-RELEASE
+```
 
-### Relay Handover
-If the LLM attempts to move a drone that is currently acting as a locked relay (`drone_id in active_relays.values()`), the system checks if there is another `idle` drone at the **exact same coordinates**.
-*   **If YES:** The system swaps them. The idle drone is locked and takes over the relay duties, and the original drone is unlocked and allowed to proceed with its new `move_to` command.
-*   **If NO:** The system blocks the move entirely, returning a `SYSTEM ERROR` to the LLM to protect the mesh link.
-
-### Auto-Release
-After every single LLM action cycle, the system checks the distance of all "Main Drones" (the drones that requested the relays) to the Base Station at `(0,0)`.
-*   If the Main Drone flies back to within **≤ 5 cells** of the Base Station, it no longer needs the signal bounce.
-*   The system automatically triggers an `unlock_drone` on its corresponding relay unit, freeing it for future tasking.
-
----
-
-## 4. Rescue Logistics Automations
-
-To streamline the Rescue phase and prevent the LLM from getting stuck in long delivery loops, the system enforces the following:
-
-### Search Phase Lock
-*   **Rule:** The system explicitly guards against sequence breaking. 
-*   If the LLM attempts to call `deliver_supplies` or `collect_supplies` while unscanned sectors remain in the `search_grid`, the python interceptor drops the command and returns a `SEARCH PHASE LOCK` warning, forcing the LLM back to its scanning duties.
-
-### Auto-Deliver Heuristic
-*   To prevent the LLM from arriving at a survivor with supplies and then failing to hand them over, an **Auto-Delivery payload check** was injected.
-*   After any `move_to` command succeeds, if the moving drone is carrying a payload AND lands within **1.5 cells** of a pending survivor, the system automatically triggers the `deliver_supplies` tool.
-*   This instantly marks the survivor as rescued and updates the global telemetry without requiring a separate turn from the LLM.
+No LLM is involved at any step. All logic is pure Python.
 
 ---
 
-## 5. Battery Preservation Failsafe
+## 2. Relay Mesh Network Deployment
 
-The system trusts the LLM but verifies hardware limits.
-*   If a `move_to` command is issued to a drone with **< 25% battery**, the system immediately hijacks the command.
-*   It logs a `BATTERY RULE` override, disables any relay checks, and rewrites the LLM's intent to instantly execute the `return_to_charging_station` tool to save the drone from total failure.
+Relays are required when a destination is **> 10 cells from the base station at (0,0)**.  
+This is checked against the **base station**, not the drone's current position.
 
+### Deployment Algorithm (`drone_agent_node` + `rescue_execution_node`)
+
+1. **Threshold Check**: `get_distance(base_x, base_y, target_x, target_y) > 10`
+2. **Midpoint Calculation**:
+   - For search: midpoint between base and target sector.
+   - For rescue: midpoint between base and the **furthest leg** of the trip (depot or survivor, whichever is farther from base).
+   ```python
+   mid_x = int((base_x + far_dest_x) / 2)
+   mid_y = int((base_y + far_dest_y) / 2)
+   ```
+3. **Relay Candidate Selection** — from all non-assigned idle drones:
+   - Must NOT be the main drone.
+   - Must NOT already be acting as a relay (`active_relays.values()`).
+   - Must NOT be locked, offline, charging, or carrying a payload.
+   - Must have enough battery to reach the midpoint + 25% reserve.
+   - **Lowest battery heuristic**: The eligible drone with the *lowest* battery is chosen. This deliberately uses near-depleted drones for the stationary relay job, preserving high-battery drones for primary missions.
+4. **Lock & Record**:
+   - `move_to(relay, mid_x, mid_y)` — fly it to position.
+   - `lock_drone(relay)` — prevent it from being stolen by other agents.
+   - `active_relays[drone_id] = relay_id` — record the mapping.
+
+### Relay Relocation
+
+When the same drone undertakes a different mission later, its relay may need to reposition.
+The system **unlocks, moves, then re-locks** the relay:
+
+```python
+await unlock_drone(existing_relay)       # 1. Temporarily allow movement
+await move_to(existing_relay, new_mid)   # 2. Fly to new optimal midpoint
+await lock_drone(existing_relay)         # 3. Lock again immediately
+await step_sync()                        # 4. Broadcast new position to frontend
+```
+
+> ⚠️ **Why unlock first?** The MCP server blocks `move_to` on locked drones. Forgetting the unlock causes the relay to silently stay in place while the node logs "Relocated" — a phantom success.
+
+### Relay Auto-Release
+
+A relay is no longer needed once the main drone returns within 10 cells of the base station. Auto-release happens in two places (defense-in-depth):
+
+1. **`drone_agent_node` Step 8**: If the mission's target sector is ≤ 10 cells from base, auto-release fires upon completing the sector.
+2. **`join_node` (Garbage Collector)**: After every parallel wave, scans `active_relays` for any main drone that is now ≤ 10 cells from base and unlocks the corresponding relay.
+
+#### The Sentinel Deletion Pattern
+
+Because LangGraph merges state updates with a **reducer** (`_merge_active_relays`), you cannot remove a key by omitting it — the old value will be merged right back!
+
+Instead, we use `None` as a **sentinel deletion value**:
+
+```python
+# WRONG — old reducer will merge {"ALPHA": "ECHO"} back in
+updates["active_relays"] = {}
+
+# CORRECT — tells the reducer to pop the key
+updates["active_relays"] = {"DRONE_ALPHA": None}
+```
+
+The reducer checks for `None` and calls `merged.pop(key)`, making the deletion permanent across all parallel state updates.
+
+---
+
+## 3. Phase State Machine (Safety Governor)
+
+The `safety_governor_node` runs **every cycle** before the Strategist and enforces:
+
+```
+SEARCH ──(all sectors scanned, survivors found)──► RESCUE ──(all rescued)──► COMPLETE
+       ──(all sectors scanned, no survivors)──────────────────────────────► COMPLETE
+```
+
+It also handles:
+- **MCP Ground-Truth Sync**: Pulls fresh telemetry from `get_all_drone_statuses` to override stale LangGraph state.
+- **Battery Emergency**: If a drone's battery is below `BATTERY_LOW_THRESHOLD` and it is idle/flying (not locked as relay), the governor immediately commands `return_to_charging_station`.
+- **Anomaly Detection**: If any drone reports `status=offline`, the governor routes to `recovery_node`.
+
+---
+
+## 4. Rescue Phase Execution
+
+The Strategist issues **one** `rescue_directive` per cycle:
+```json
+{"drone_id": "DRONE_ALPHA", "survivor_id": "S1", "supply_type": "medical_kit"}
+```
+
+The `rescue_execution_node` then executes the entire supply chain autonomously:
+
+1. **Depot Discovery**: Calls `list_supply_depots` to find the nearest depot stocking the required supply.
+2. **Battery Preflight**: Calculates `dist(drone→depot) + dist(depot→survivor)`. If insufficient battery, drops the directive cleanly with a detailed log — the Strategist sees the failure and reassigns next cycle.
+3. **Relay Deploy**: If any leg of the trip is > 10 cells from base, deploys or relocates a relay to the optimal midpoint.
+4. **Supply Chain**: `move_to(depot)` → `collect_supplies` → `move_to(survivor)` → `deliver_supplies`.
+5. **Ground-Truth Sync**: Calls `get_swarm_summary` to get the authoritative rescued/pending list from the MCP server.
+6. **Directive Clear**: Sets `rescue_directive = None` so the Strategist issues a fresh one next cycle.
+
+### Deadlock Breaker (join_node)
+
+If the Strategist issues no directive (all drones are `FAIL` on battery), the `join_node` detects the deadlock and forces all idle, unlocked drones with `battery < 95%` to return to the charging station. This breaks the loop by ensuring at least one drone is charging and will be `FEASIBLE` on the next cycle.
+
+---
+
+## 5. Frontend Real-Time Sync
+
+Every MCP tool call that physically changes world state is followed by:
+
+```python
+await mcp_client.step_sync()
+```
+
+This triggers a callback wired by `mission_runner.py` that:
+1. Calls `get_world_state` on the MCP server.
+2. Updates the local `WorldState` singleton (used by the REST dashboard).
+3. Emits a `world_sync` SSE event to all connected browser clients.
+4. Sleeps `0.5s` so the frontend animation finishes before the next action fires.
+
+A `_world_state_poller` background task also runs every 3 seconds as a safety net for long LLM calls that contain no MCP actions.
+
+---
+
+## 6. LangGraph Concurrency Architecture
+
+### Annotated Reducers
+All fields touched by parallel `drone_agent_node` executions use typed reducer functions:
+
+| Field | Reducer | Strategy |
+|---|---|---|
+| `drones` | `_merge_drones` | Latest telemetry per drone ID wins |
+| `mission_log` | `_merge_mission_log` | Append-only |
+| `search_grid` | `_merge_search_grid` | `scanned=True` is permanent and can never be unset |
+| `active_relays` | `_merge_active_relays` | `None` sentinel for deletions |
+| `signal_map` | `_merge_signal_map` | Dict merge (each drone writes its own key) |
+
+### Parallel Fan-Out (Send API)
+```python
+sends = [Send("drone_agent_node", {**state, "drone_id": d, "target_sector": s}) for d, s in assignments.items()]
+return sends  # LangGraph executes all drone_agent_nodes concurrently
+```
+
+`_TEMP_LOCKED_RELAYS` (a module-level Python `set`) prevents two concurrent `drone_agent_node` coroutines from locking the same relay drone in the same tick.
+
+---
+
+## 7. Decision Flow (Current Architecture)
 
 ```mermaid
 flowchart TD
-    START([Mission Start]) --> THINKING[thinking_node\nAssessing telemetry...]
-    THINKING --> COMMANDER[commander_node\nLLM Strategic Reasoning]
+    START([🚨 Mission Start]) --> GOV
 
-    COMMANDER --> PHASE_CHECK{Unscanned\nsectors?}
+    GOV["🛡️ safety_governor_node<br/>MCP telemetry sync<br/>Battery emergencies<br/>Phase transitions"]
 
-    PHASE_CHECK -- Yes --> SEARCH_PHASE[SEARCH PHASE\nAssign sectors, scan, discover]
-    PHASE_CHECK -- No --> RESCUE_CHECK{Survivors\npending?}
+    GOV --> PHASE_CHECK{Phase?}
+    PHASE_CHECK -- complete --> END_NODE([✅ MISSION COMPLETE])
+    PHASE_CHECK -- offline drone --> RECOVERY["🛠️ recovery_node<br/>attempt_drone_recovery"]
+    RECOVERY --> GOV
+    PHASE_CHECK -- search or rescue --> STRATEGIST
 
-    RESCUE_CHECK -- Yes --> RESCUE_PHASE[RESCUE PHASE\nDeliver supplies to survivors]
-    RESCUE_CHECK -- No --> MISSION_COMPLETE([MISSION COMPLETE\nAll sectors cleared & lives saved])
+    STRATEGIST["🧠 strategist_node<br/>LLM — Gemini Flash<br/>NEVER names drones<br/>NEVER issues move commands"]
 
-    SEARCH_PHASE --> LLM_ACTION[LLM selects tool_call\nwith thought + parameters]
-    RESCUE_PHASE --> LLM_ACTION
+    STRATEGIST -- search --> PHEROMONE["📡 priority_updates<br/>{sector_id: float}"]
+    STRATEGIST -- rescue --> DIRECTIVE["🆘 rescue_directive<br/>{drone, survivor, supply}"]
+    STRATEGIST -- no directive --> JOIN
 
-    LLM_ACTION --> TOOL_EXEC[tool_execution_node\nIntercepts & validates command]
+    PHEROMONE --> DISPATCH
 
-    %% Guard 1: Relay Shield
-    TOOL_EXEC --> RELAY_SHIELD_CHECK{unlock_drone\non active relay?}
-    RELAY_SHIELD_CHECK -- Yes --> RELAY_SHIELD_ERR[SYSTEM ERROR\nRelay Shield — mesh still live]
-    RELAY_SHIELD_ERR --> ROUTE
-    RELAY_SHIELD_CHECK -- No --> PHASE_GUARD
+    DISPATCH["⚙️ dispatch_drones<br/>Pure Python ACO Assignment<br/>cost = distance / battery<br/>Relay reservation at assignment time<br/>Returns Send × N for parallel fan-out"]
 
-    %% Guard 2: Phase Lock
-    PHASE_GUARD{Rescue tool\nduring search?}
-    PHASE_GUARD -- Yes --> PHASE_LOCK_ERR[SEARCH PHASE LOCK\nForbidden during scan phase]
-    PHASE_LOCK_ERR --> ROUTE
-    PHASE_GUARD -- No --> MOVE_CHECK
+    DISPATCH -- parallel Send × N --> DRONE["🚁 drone_agent_node × N<br/>No LLM. Pure Python.<br/>1. CLAIM sector<br/>2. Battery check<br/>3. Relay deploy<br/>4. move_to sector<br/>5. thermal_scan<br/>6. Mark COMPLETE<br/>7. Telemetry sync<br/>8. Auto-release relay"]
 
-    %% move_to branch
-    MOVE_CHECK{Tool is\nmove_to?}
-    MOVE_CHECK -- No --> DISPATCH
-    MOVE_CHECK -- Yes --> PERSISTENT_RELAY
+    DRONE --> JOIN
 
-    PERSISTENT_RELAY{Drone is\nactive relay?}
-    PERSISTENT_RELAY -- No --> BATTERY_CHECK
-    PERSISTENT_RELAY -- Yes --> HANDOVER_CHECK
+    JOIN["🔗 join_node<br/>Relay garbage collector<br/>Ground-truth survivor sync<br/>Deadlock breaker → force recharge"]
 
-    HANDOVER_CHECK{Idle drone\nat same coords?}
-    HANDOVER_CHECK -- Yes --> RELAY_HANDOVER[RELAY HANDOVER\nSwap relay to idle drone\nUnlock original drone]
-    RELAY_HANDOVER --> BATTERY_CHECK
-    HANDOVER_CHECK -- No --> BLOCK_MOVE[SYSTEM ERROR\nPersistent Relay — mesh blocked]
-    BLOCK_MOVE --> ROUTE
+    JOIN --> GOV
 
-    BATTERY_CHECK{Battery\n< 25%?}
-    BATTERY_CHECK -- Yes --> BATTERY_OVERRIDE[BATTERY RULE\nOverride → return_to_charging_station]
-    BATTERY_OVERRIDE --> DISPATCH
-    BATTERY_CHECK -- No --> RELAY_RULE
+    DIRECTIVE --> RESCUE
 
-    RELAY_RULE{Distance\n> 5 cells?}
-    RELAY_RULE -- No --> DISPATCH
-    RELAY_RULE -- Yes --> SHARED_RELAY_CHECK
+    RESCUE["📦 rescue_execution_node<br/>Depot find → Preflight check<br/>Relay deploy/relocate<br/>move depot → collect → move survivor → deliver<br/>Survivor sync"]
 
-    SHARED_RELAY_CHECK{Drone already\nat midpoint?}
-    SHARED_RELAY_CHECK -- Yes --> REUSE_RELAY[Reuse existing drone\nas shared relay]
-    REUSE_RELAY --> DISPATCH
-    SHARED_RELAY_CHECK -- No --> FIND_RELAY_CANDIDATE
+    RESCUE --> GOV
 
-    FIND_RELAY_CANDIDATE[Find relay candidate\nLowest battery heuristic\nNot locked, not offline\nNot carrying payload\nBattery ≥ 25% + trip cost]
-    FIND_RELAY_CANDIDATE --> CANDIDATE_FOUND{Eligible relay\ncandidate found?}
-
-    CANDIDATE_FOUND -- No --> NO_RELAY_ERR[SYSTEM ERROR\nNo idle drones — abort move]
-    NO_RELAY_ERR --> ROUTE
-    CANDIDATE_FOUND -- Yes --> DEPLOY_RELAY[Deploy relay to midpoint\nLock relay drone\nRecord in active_relays]
-    DEPLOY_RELAY --> DISPATCH
-
-    %% MCP Tool Dispatch
-    DISPATCH[Universal MCP Dispatcher\nExecute tool via mcp_client]
-    DISPATCH --> EXEC_SUCCESS{Execution\nsucceeded?}
-
-    EXEC_SUCCESS -- No --> ROUTE
-    EXEC_SUCCESS -- Yes --> SYNC[Drone Hardware Sync\nget_drone_status]
-    SYNC --> MISSION_SYNC[Mission State Sync\nget_swarm_summary\nUpdate survivors pending/rescued]
-
-    MISSION_SYNC --> AUTO_DELIVER_CHECK{move_to succeeded\nDrone has payload\nWithin 1.5 cells of survivor?}
-    AUTO_DELIVER_CHECK -- Yes --> AUTO_DELIVER[AUTO-DELIVER\nCall deliver_supplies\nMark survivor rescued\nClear payload from state]
-    AUTO_DELIVER --> SCAN_UPDATE
-    AUTO_DELIVER_CHECK -- No --> SCAN_UPDATE
-
-    SCAN_UPDATE{Tool was\nthermal_scan?}
-    SCAN_UPDATE -- Yes --> MARK_SECTOR[Mark sector as scanned\nParse survivors_detected\nUpdate detected_survivors]
-    MARK_SECTOR --> AUTO_RELEASE
-    SCAN_UPDATE -- No --> FLEET_SYNC_CHECK
-
-    FLEET_SYNC_CHECK{Tool was\ndiscover_drones or\nget_all_drone_statuses?}
-    FLEET_SYNC_CHECK -- Yes --> FLEET_SYNC[Sync ALL drone\nbattery, position, status, payload]
-    FLEET_SYNC --> AUTO_RELEASE
-    FLEET_SYNC_CHECK -- No --> AUTO_RELEASE
-
-    AUTO_RELEASE[Auto-Release Check\nFor each active relay:\nIf main drone ≤ 5 cells from base\n→ Unlock relay drone\n→ Remove from active_relays]
-    AUTO_RELEASE --> ROUTE
-
-    %% Routing
-    ROUTE[route_after_execution]
-    ROUTE --> ERROR_CHECK{Last log\nhas ERROR?}
-    ERROR_CHECK -- Yes --> RECOVERY[recovery_node\nattempt_drone_recovery]
-    RECOVERY --> COMMANDER
-    ERROR_CHECK -- No --> COMPLETE_CHECK
-
-    COMPLETE_CHECK{All sectors scanned\nAND no survivors pending?}
-    COMPLETE_CHECK -- Yes --> MISSION_COMPLETE
-    COMPLETE_CHECK -- No --> COMMANDER
-
-    %% Styles
-    classDef system fill:#1e293b,stroke:#334155,color:#e2e8f0
     classDef llm fill:#312e81,stroke:#4338ca,color:#e0e7ff
-    classDef error fill:#7f1d1d,stroke:#991b1b,color:#fee2e2
+    classDef python fill:#064e3b,stroke:#047857,color:#d1fae5
+    classDef system fill:#1e293b,stroke:#475569,color:#e2e8f0
+    classDef phase fill:#78350f,stroke:#92400e,color:#fef3c7
     classDef success fill:#14532d,stroke:#166534,color:#dcfce7
-    classDef automation fill:#0c4a6e,stroke:#0369a1,color:#e0f2fe
-    classDef decision fill:#78350f,stroke:#92400e,color:#fef3c7
 
-    class THINKING,COMMANDER,LLM_ACTION llm
-    class SEARCH_PHASE,RESCUE_PHASE system
-    class RELAY_SHIELD_ERR,PHASE_LOCK_ERR,BLOCK_MOVE,NO_RELAY_ERR error
-    class MISSION_COMPLETE success
-    class RELAY_HANDOVER,BATTERY_OVERRIDE,DEPLOY_RELAY,REUSE_RELAY,AUTO_DELIVER,FLEET_SYNC,MARK_SECTOR,AUTO_RELEASE,SYNC,MISSION_SYNC automation
-    class DISPATCH,TOOL_EXEC,ROUTE,RECOVERY system
+    class STRATEGIST llm
+    class DRONE,DISPATCH python
+    class GOV,JOIN,RESCUE,RECOVERY system
+    class PHASE_CHECK phase
+    class END_NODE success
 ```
