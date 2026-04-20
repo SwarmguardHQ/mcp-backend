@@ -142,6 +142,7 @@ async def safety_governor_node(state: SwarmState) -> dict:
         updates["mission_log"].append(
             f"[GOVERNOR] ✅ All {len(rescued_set)} survivor(s) rescued. MISSION COMPLETE."
         )
+        updates["mission_log"].append("[SYSTEM] 🏁 MISSION SUCCESS — All objectives achieved.")
 
     return updates
 
@@ -154,7 +155,6 @@ def route_after_governor(state: SwarmState) -> str:
 
     # ── 2. Mission Completion ──────────────────────────────────────────────────
     if state.get("phase") == "complete":
-        state["mission_log"].append("[SYSTEM] 🏁 MISSION SUCCESS — All objectives achieved.")
         return END
 
     # ── 3. Normal Flow ─────────────────────────────────────────────────────────
