@@ -87,6 +87,18 @@ async def list_tools() -> ListToolsResult:
                  "properties": {"drone_id": {"type": "string"}},
                  "required": ["drone_id"],
              }),
+        Tool(name="rgb_scan",
+             description=(
+                 "Optical colour-camera scan (radius 2.5 cells). Detects survivors by "
+                 "spectral signature (clothing colour / skin tone). Returns r/g/b channel "
+                 "readings, condition_hint (critical/moderate/stable), and rgb_confidence. "
+                 "Use after thermal_scan for confirmation or in open terrain."
+             ),
+             inputSchema={
+                 "type": "object",
+                 "properties": {"drone_id": {"type": "string"}},
+                 "required": ["drone_id"],
+             }),
 
         # Battery
         Tool(name="get_battery_status",
@@ -213,6 +225,7 @@ TOOL_MAP: dict[str, Any] = {
     "get_grid_map":               T.get_grid_map,
     "thermal_scan":               T.thermal_scan,
     "acoustic_scan":              T.acoustic_scan,
+    "rgb_scan":                   T.rgb_scan,
     "get_battery_status":         T.get_battery_status,
     "return_to_charging_station": T.return_to_charging_station,
     "charge_drone":               T.charge_drone,

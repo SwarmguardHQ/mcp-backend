@@ -22,8 +22,17 @@ BATTERY_CRITICAL_THRESHOLD: int = 10  # immediate recall
 
 THERMAL_SCAN_RADIUS: float = 1.5    # cells
 ACOUSTIC_SCAN_RADIUS: float = 1.0   # cells
+RGB_SCAN_RADIUS: float = 2.5        # cells — wider FOV than thermal
 SCAN_BATTERY_COST: int = 3          # % per thermal scan
 ACOUSTIC_BATTERY_COST: int = 2      # % per acoustic scan
+RGB_BATTERY_COST: int = 2           # % per RGB camera scan
+
+# RGB detection probability at range 0 (degrades with distance²)
+RGB_BASE_DETECTION_PROB: float = 0.78
+# Colour channel noise standard deviation
+RGB_NOISE_SIGMA: float = 0.12
+# Thermal blob threshold (°C equivalent, 0-100 scale)
+BLOB_HEAT_THRESHOLD: float = 50.0
 
 # ── Mesh / offline ────────────────────────────────────────────────────────────
 MESH_MESSAGE_MAX_LEN: int = 200
