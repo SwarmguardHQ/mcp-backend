@@ -7,15 +7,14 @@ Flow:
     └── safety_governor_node
           ├── [complete] → END
           └── [normal]   → strategist_node
-                ├── [search  + assignments] → Send × N → drone_agent_node → join_node
-                ├── [search  + no idle]    → join_node
-                ├── [rescue  + directive]  → rescue_execution_node
-                └── [rescue  + no direct] → join_node
-                        └── safety_governor_node  (loop)
+                                ├── [search] → broadcast_tasks → Send[drone_bidding_node] → resolve_bids_node
+                                │                                                               └── dispatch_winners → Send[drone_agent_node] → join_node → safety_governor_node (loop)
+                                ├── [rescue  + directive]  → rescue_execution_node
+                                                                    └── safety_governor_node  (loop)
 
 Key LangGraph features used:
-  - Annotated reducers on SwarmState fields (search_grid, drones, mission_log, active_relays)
-  - langgraph.types.Send for true parallel drone_agent_node fan-out
+  - Annotated reducers on SwarmState fields (search_grid, drones, mission_log, active_relays, bids, signal_map)
+  - langgraph.types.Send for true parallel fan-out (drone_bidding_node & drone_agent_node)
   - Conditional edges for phase routing and emergency branching
 """
 
@@ -26,7 +25,10 @@ from .nodes import (
     safety_governor_node,
     route_after_governor,
     strategist_node,
-    dispatch_drones,
+    broadcast_tasks,
+    drone_bidding_node,
+    resolve_bids_node,
+    dispatch_winners,
     drone_agent_node,
     join_node,
     rescue_execution_node,
@@ -40,6 +42,8 @@ def create_graph():
     # ── Register nodes ────────────────────────────────────────────────────────
     workflow.add_node("safety_governor_node",  safety_governor_node)
     workflow.add_node("strategist_node",       strategist_node)
+    workflow.add_node("drone_bidding_node",    drone_bidding_node)
+    workflow.add_node("resolve_bids_node",     resolve_bids_node)
     workflow.add_node("drone_agent_node",      drone_agent_node)
     workflow.add_node("join_node",             join_node)
     workflow.add_node("rescue_execution_node", rescue_execution_node)
@@ -59,17 +63,31 @@ def create_graph():
         },
     )
 
-    # ── Strategist routing: fan-out via Send (search) or rescue execution ─────
-    # dispatch_drones returns either:
-    #   • A list of Send("drone_agent_node", ...) objects — parallel fan-out
-    #   • "rescue_execution_node"  — string key, handled by path_map
-    #   • "join_node"              — string key, handled by path_map
+    # ── Strategist routing: fan-out bidding (search) or rescue execution ─────
+    # broadcast_tasks returns either:
+    #   • A list of Send("drone_bidding_node", ...) objects — parallel fan-out
+    #   • "rescue_execution_node"  — string key
+    #   • "join_node"              — string key
     workflow.add_conditional_edges(
         "strategist_node",
-        dispatch_drones,
+        broadcast_tasks,
         {
+            "drone_bidding_node":    "drone_bidding_node",
             "rescue_execution_node": "rescue_execution_node",
             "join_node":             "join_node",
+        },
+    )
+
+    # ── Bidding phase reconverges to resolve ──────────────────────────────────
+    workflow.add_edge("drone_bidding_node", "resolve_bids_node")
+
+    # ── Resolve bids → dispatch winners to agents ─────────────────────────────
+    workflow.add_conditional_edges(
+        "resolve_bids_node",
+        dispatch_winners,
+        {
+            "join_node":        "join_node",
+            "drone_agent_node": "drone_agent_node",
         },
     )
 
