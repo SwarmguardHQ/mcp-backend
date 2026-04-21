@@ -618,6 +618,14 @@ async def drone_agent_node(state: dict) -> dict:
                 move_res = await mcp_client.session.call_tool(
                     "move_to", {"drone_id": existing_relay, "x": mid_x, "y": mid_y}
                 )
+
+                res_text = move_res.content[0].text
+                if "error" in res_text.lower():
+                    raise RuntimeError(f"Relocate failed: {res_text}")
+
+                updates["mission_log"].append(
+                    f"[{drone_id}] 📡 Relocated existing relay {existing_relay} to optimal midpoint ({mid_x},{mid_y})"
+                )
                 
                 # Relay stationary scan
                 scan_res = await mcp_client.session.call_tool("thermal_scan", {"drone_id": existing_relay})
@@ -625,14 +633,7 @@ async def drone_agent_node(state: dict) -> dict:
                 updates["mission_log"].append(f"[{existing_relay}] 🔍 Relay drone is executing thermal_scan: {scan_text[:200]}")
                 
                 await mcp_client.session.call_tool("lock_drone", {"drone_id": existing_relay})
-                
-                res_text = move_res.content[0].text
-                if "error" in res_text.lower():
-                    raise RuntimeError(f"Relocate failed: {res_text}")
                     
-                updates["mission_log"].append(
-                    f"[{drone_id}] 📡 Relocated existing relay {existing_relay} to optimal midpoint ({mid_x},{mid_y})"
-                )
                 try:
                     scan_data = json.loads(scan_text)
                     newly_found = scan_data.get("survivors_detected", [])
@@ -650,6 +651,16 @@ async def drone_agent_node(state: dict) -> dict:
                 await mcp_client.step_sync()
             except Exception as e:
                 updates["mission_log"].append(f"[{drone_id}] ⚠️ Relay relocation failed: {e}")
+                # Unbind the active_relays to prevent always sticking to the active_relays that low battery
+                # (Unable to move to the midpoint)
+                if "active_relays" not in updates:
+                    updates["active_relays"] = {}
+                updates["active_relays"][drone_id] = None
+                updates["search_grid"][target_sector] = {
+                    **state["search_grid"].get(target_sector, {}),
+                    "claimed_by": None,
+                }
+                return updates
         else:
             # Already-committed relays in this snapshot: exclude them so two
             # parallel drone agents never try to lock the same physical drone.
@@ -695,15 +706,16 @@ async def drone_agent_node(state: dict) -> dict:
                         "move_to", {"drone_id": relay_drone["id"], "x": mid_x, "y": mid_y}
                     )
                     relay_text = relay_res.content[0].text
+
+                    updates["mission_log"].append(
+                        f"[{drone_id}] 📡 Relay {relay_drone['id']} deployed to ({mid_x},{mid_y}): {relay_text}"
+                    )
                     
                     # Relay stationary scan
                     scan_res = await mcp_client.session.call_tool("thermal_scan", {"drone_id": relay_drone["id"]})
                     scan_text = scan_res.content[0].text
                     updates["mission_log"].append(f"[{relay_drone['id']}] 🔍 Relay drone is executing thermal_scan: {scan_text[:200]}")
                     
-                    updates["mission_log"].append(
-                        f"[{drone_id}] 📡 Relay {relay_drone['id']} deployed to ({mid_x},{mid_y}): {relay_text}"
-                    )
                     try:
                         scan_data = json.loads(scan_text)
                         newly_found = scan_data.get("survivors_detected", [])
@@ -1048,16 +1060,45 @@ async def rescue_execution_node(state: SwarmState) -> dict:
                     move_res = await mcp_client.session.call_tool(
                         "move_to", {"drone_id": existing_relay, "x": mid_x, "y": mid_y}
                     )
-                    await mcp_client.session.call_tool("lock_drone", {"drone_id": existing_relay})
-                    
+
                     res_text = move_res.content[0].text
-                    if "error" not in res_text.lower():
-                        updates["mission_log"].append(
-                            f"[RESCUE] 📡 Relocated existing Mesh Relay {existing_relay} to optimal midpoint ({mid_x},{mid_y})"
-                        )
-                        await mcp_client.step_sync()
+                    if "error" in res_text.lower():
+                        raise RuntimeError(f"Relocate failed: {res_text}")
+
+                    updates["mission_log"].append(
+                        f"[{drone_id}] 📡 Relocated existing relay {existing_relay} to optimal midpoint ({mid_x},{mid_y})"
+                    )
+
+                    # Relay stationary scan
+                    scan_res = await mcp_client.session.call_tool("thermal_scan", {"drone_id": existing_relay})
+                    scan_text = scan_res.content[0].text
+                    updates["mission_log"].append(f"[{existing_relay}] 🔍 Relay drone is executing thermal_scan: {scan_text[:200]}")
+
+                    try:
+                        scan_data = json.loads(scan_text)
+                        newly_found = scan_data.get("survivors_detected", [])
+
+                        for s in newly_found:
+                            sid = s.get("survivor_id")
+                            if sid:
+                                updates["mission_log"].append(
+                                    f"[{existing_relay}] 🆘 DETECTED {sid} at "
+                                    f"({s['position']['x']},{s['position']['y']}) "
+                                    f"[{s.get('condition','?').upper()}]"
+                                )
+                    except Exception:
+                        pass
+
+                    await mcp_client.session.call_tool("lock_drone", {"drone_id": existing_relay})
+                    await mcp_client.step_sync()
                 except Exception as e:
-                    pass
+                    updates["mission_log"].append(f"[{drone_id}] ⚠️ Relay relocation failed: {e}. Directive dropped.")
+                    # Unbind the active_relays to prevent always sticking to the active_relays that low battery
+                    # (Unable to move to the midpoint)
+                    if "active_relays" not in updates:
+                        updates["active_relays"] = {}
+                    updates["active_relays"][drone_id] = None
+                    return updates
             else:
                 already_relaying = set(active_relays.values())
 
@@ -1073,20 +1114,61 @@ async def rescue_execution_node(state: SwarmState) -> dict:
                         + BATTERY_RESERVE_MIN
                     )
                 ]
-                if available_relay_drones:
+
+                # Check if a relay is already sitting at the midpoint (shared relay)
+                existing_at_mid = next(
+                    (d for d in state["drones"]
+                    if d["id"] != drone_id and d["x"] == mid_x and d["y"] == mid_y
+                    and not d.get("payload")),
+                    None
+                )
+
+                if existing_at_mid:
+                    # Reuse it — lock it if not already locked
+                    updates["active_relays"] = {**active_relays, drone_id: existing_at_mid["id"]}
+                    updates["mission_log"].append(
+                        f"[{drone_id}] 📡 Reusing shared relay {existing_at_mid['id']} at ({mid_x},{mid_y})."
+                    )
+                elif available_relay_drones:
                     relay_drone = min(available_relay_drones, key=lambda d: d.get("battery", 100))
                     try:
                         relay_res = await mcp_client.session.call_tool(
                             "move_to", {"drone_id": relay_drone["id"], "x": mid_x, "y": mid_y}
                         )
-                        await mcp_client.session.call_tool("lock_drone", {"drone_id": relay_drone["id"]})
+                        res_text = relay_res.content[0].text
+                        if "error" in res_text.lower():
+                            raise RuntimeError(f"Relocate failed: {res_text}")
+
                         updates["mission_log"].append(
-                            f"[RESCUE] 📡 Mesh Relay {relay_drone['id']} deployed to ({mid_x},{mid_y}): {relay_res.content[0].text}"
+                            f"[RESCUE] 📡 Relay {relay_drone['id']} deployed to ({mid_x},{mid_y}): {res_text}"
                         )
+
+                        # Relay stationary scan
+                        scan_res = await mcp_client.session.call_tool("thermal_scan", {"drone_id": relay_drone["id"]})
+                        scan_text = scan_res.content[0].text
+                        updates["mission_log"].append(f"[{relay_drone['id']}] 🔍 Relay drone is executing thermal_scan: {scan_text[:200]}")
+
+                        try:
+                            scan_data = json.loads(scan_text)
+                            newly_found = scan_data.get("survivors_detected", [])
+
+                            for s in newly_found:
+                                sid = s.get("survivor_id")
+                                if sid:
+                                    updates["mission_log"].append(
+                                        f"[{relay_drone['id']}] 🆘 DETECTED {sid} at "
+                                        f"({s['position']['x']},{s['position']['y']}) "
+                                        f"[{s.get('condition','?').upper()}]"
+                                    )
+                        except Exception:
+                            pass
+
+                        await mcp_client.session.call_tool("lock_drone", {"drone_id": relay_drone["id"]})
                         updates["active_relays"] = {**active_relays, drone_id: relay_drone["id"]}
                         await mcp_client.step_sync()
                     except Exception as e:
-                        updates["mission_log"].append(f"[RESCUE] ⚠️ Relay deploy failed: {e}")
+                        updates["mission_log"].append(f"[RESCUE] ⚠️ Relay deploy failed: {e}. Directive dropped.")
+                        return updates
                 else:
                     updates["mission_log"].append(
                         f"[RESCUE] ⚠️ No relay available for {max_dist_from_base:.1f}-cell trip to "

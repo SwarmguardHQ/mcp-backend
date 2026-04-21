@@ -29,7 +29,7 @@ INITIAL_SURVIVORS = [
     
     # Mid ranges
     {"id": "S4", "x": 5, "y": 1, "condition": "critical"},
-    {"id": "S5", "x": 5, "y": 3, "condition": "moderate"},
+    {"id": "S5", "x": 8, "y": 1, "condition": "moderate"},
     {"id": "S6", "x": 14, "y": 5, "condition": "stable"},
     
     # Close
