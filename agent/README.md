@@ -5,7 +5,7 @@
 Nature has already solved the problem of large-scale coordination. Ants don't wait for a general's orders; they follow **Stigmergy**—environmental cues called pheromones. Today, I’m showcasing a Swarm Intelligence architecture for Drone Rescue that applies this biological efficiency to life-saving missions.
 
 ### 2. The Mechanics: Competitive Bidding & Decentralized Tasking
-In our system, the Commander Agent doesn't micromanage. Instead, it 'scents' the environment with digital pheromones. Each drone acts as an autonomous decentralized bidder. It will performs a **Pre-flight Simulation** based on its current GPS, battery life, and distance, the drone calculates its 'cost' and submits a bid for the task.
+In our system, the Commander Agent doesn't micromanage. Instead, it 'scents' the environment with digital pheromones. Each drone acts as an autonomous decentralized bidder. It will performs a **Pre-flight Simulation** based on its current GPS, battery life, and distance, the drone calculates its 'cost' and submits a bid for the task. The drone will always prioritize on bidding the highest pheromones, break ties by lowest cost (if there is a tie in pheromones, the drone will submit bid for the sector that has the lowest cost).
 
 Our **resolve_bids_node** then evaluates these submissions in real-time, rewarding the sector to the drone with the 'highest' bid—which, in our logistics, is the drone with the lowest operational cost (shortest route between: **Current Location → Supply Depot → Survivor → Charging Station**). Once rewarded, the drone locks and claims the task in our **Global Search Grid**.
 

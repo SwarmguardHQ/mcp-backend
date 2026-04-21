@@ -14,7 +14,7 @@ class DroneStatus(str, Enum):
     IDLE       = "idle"
     FLYING     = "flying"
     SCANNING   = "scanning"
-    RETURNING  = "returning"
+    RELAY      = "relay"
     CHARGING   = "charging"
     DELIVERING = "delivering"
     OFFLINE    = "offline"
