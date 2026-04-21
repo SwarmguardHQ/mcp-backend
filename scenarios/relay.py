@@ -33,5 +33,5 @@ INITIAL_SURVIVORS = [
     {"id": "S6", "x": 14, "y": 5, "condition": "stable"},
     
     # Close
-    {"id": "S7", "x": 3, "y": 9, "condition": "stable"},
+    {"id": "S7", "x": 7, "y": 7, "condition": "stable"},
 ]

@@ -56,15 +56,11 @@ You do NOT issue move commands. You do NOT name specific drones in search phase.
 # Priority rank is inverted when seeding GridCell.priority (rank 1 → 10.0).
 
 PRIORITY_MAP: Dict[str, Dict] = {
-    "sector_1": {"type": "School",      "priority": 2, "x": 5, "y": 2},
-    "sector_2": {"type": "Hospital",    "priority": 1, "x": 8, "y": 5},
-    "sector_3": {"type": "Generic",     "priority": 5, "x": 1, "y": 1},
-    "sector_4": {"type": "Commercial",  "priority": 4, "x": 2, "y": 2},
-    "sector_5": {"type": "Residential", "priority": 2, "x": 2, "y": 8},
-    "sector_6": {"type": "Industrial",  "priority": 3, "x": 12, "y": 12},
-    "sector_7": {"type": "Residential", "priority": 2, "x": 2, "y": 16},
-    "sector_8": {"type": "Commercial",  "priority": 4, "x": 14, "y": 5},
-    "sector_9": {"type": "Generic",     "priority": 5, "x": 8, "y": 14},
+    "sector_1": {"type": "School",      "priority": 1, "x": 5, "y": 2},
+    "sector_2": {"type": "Residential", "priority": 2, "x": 2, "y": 8},
+    "sector_3": {"type": "Industrial",  "priority": 3, "x": 12, "y": 12},
+    "sector_4": {"type": "Residential", "priority": 4, "x": 2, "y": 16},
+    "sector_5": {"type": "Commercial",  "priority": 5, "x": 14, "y": 5},
 }
 
 

@@ -618,6 +618,12 @@ async def drone_agent_node(state: dict) -> dict:
                 move_res = await mcp_client.session.call_tool(
                     "move_to", {"drone_id": existing_relay, "x": mid_x, "y": mid_y}
                 )
+                
+                # Relay stationary scan
+                scan_res = await mcp_client.session.call_tool("thermal_scan", {"drone_id": existing_relay})
+                scan_text = scan_res.content[0].text
+                updates["mission_log"].append(f"[{existing_relay}] 🔍 Relay drone is executing thermal_scan: {scan_text[:200]}")
+                
                 await mcp_client.session.call_tool("lock_drone", {"drone_id": existing_relay})
                 
                 res_text = move_res.content[0].text
@@ -627,6 +633,20 @@ async def drone_agent_node(state: dict) -> dict:
                 updates["mission_log"].append(
                     f"[{drone_id}] 📡 Relocated existing relay {existing_relay} to optimal midpoint ({mid_x},{mid_y})"
                 )
+                try:
+                    scan_data = json.loads(scan_text)
+                    newly_found = scan_data.get("survivors_detected", [])
+
+                    for s in newly_found:
+                        sid = s.get("survivor_id")
+                        if sid:
+                            updates["mission_log"].append(
+                                f"[{existing_relay}] 🆘 DETECTED {sid} at "
+                                f"({s['position']['x']},{s['position']['y']}) "
+                                f"[{s.get('condition','?').upper()}]"
+                            )
+                except Exception:
+                    pass
                 await mcp_client.step_sync()
             except Exception as e:
                 updates["mission_log"].append(f"[{drone_id}] ⚠️ Relay relocation failed: {e}")
@@ -675,9 +695,28 @@ async def drone_agent_node(state: dict) -> dict:
                         "move_to", {"drone_id": relay_drone["id"], "x": mid_x, "y": mid_y}
                     )
                     relay_text = relay_res.content[0].text
+                    
+                    # Relay stationary scan
+                    scan_res = await mcp_client.session.call_tool("thermal_scan", {"drone_id": relay_drone["id"]})
+                    scan_text = scan_res.content[0].text
+                    updates["mission_log"].append(f"[{relay_drone['id']}] 🔍 Relay drone is executing thermal_scan: {scan_text[:200]}")
+                    
                     updates["mission_log"].append(
                         f"[{drone_id}] 📡 Relay {relay_drone['id']} deployed to ({mid_x},{mid_y}): {relay_text}"
                     )
+                    try:
+                        scan_data = json.loads(scan_text)
+                        newly_found = scan_data.get("survivors_detected", [])
+                        for s in newly_found:
+                            sid = s.get("survivor_id")
+                            if sid:
+                                updates["mission_log"].append(
+                                    f"[{relay_drone['id']}] 🆘 DETECTED {sid} at "
+                                    f"({s['position']['x']},{s['position']['y']}) "
+                                    f"[{s.get('condition','?').upper()}]"
+                                )
+                    except Exception:
+                        pass
     
                     if "error" in relay_text.lower():
                         raise RuntimeError(f"Relay move failed: {relay_text}")
@@ -746,7 +785,6 @@ async def drone_agent_node(state: dict) -> dict:
         return updates
 
     # ── STEP 5: THERMAL SCAN ──────────────────────────────────────────────────
-    survivor_detections: list = []
     try:
         scan_res  = await mcp_client.session.call_tool("thermal_scan", {"drone_id": drone_id})
         scan_text = scan_res.content[0].text
@@ -762,12 +800,6 @@ async def drone_agent_node(state: dict) -> dict:
             for s in newly_found:
                 sid = s.get("survivor_id")
                 if sid:
-                    survivor_detections.append({
-                        "id":        sid,
-                        "x":         s["position"]["x"],
-                        "y":         s["position"]["y"],
-                        "condition": s.get("condition", "unknown"),
-                    })
                     updates["mission_log"].append(
                         f"[{drone_id}] 🆘 DETECTED {sid} at "
                         f"({s['position']['x']},{s['position']['y']}) "

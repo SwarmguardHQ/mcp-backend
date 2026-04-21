@@ -123,7 +123,7 @@ class MissionRunner:
             from agent.utils import PRIORITY_MAP, priority_rank_to_float
 
             # Sectors that are pre-scanned in this scenario
-            PRESCANNED_SECTORS = {"sector_2", "sector_4"}
+            PRESCANNED_SECTORS = {}
 
             initial_search_grid = {
                 sid: {
