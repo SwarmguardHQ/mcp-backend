@@ -45,6 +45,7 @@ VALID_DRONE_IDS: list[str] = [d["id"] for d in INITIAL_FLEET]
 class MissionRequest(BaseModel):
     scenarios: str
     custom_prompt: Optional[str] = None
+    online_mode: bool = True
 
     @field_validator("scenarios")
     @classmethod

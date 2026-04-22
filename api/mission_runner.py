@@ -46,7 +46,7 @@ class MissionRunner:
 
     # ── public API ─────────────────────────────────────────────────────────────
 
-    def start(self, scenario: str, custom_prompt: Optional[str] = None) -> MissionState:
+    def start(self, scenario: str, custom_prompt: Optional[str] = None, online_mode: bool = True) -> MissionState:
         """
         Resolve the scenarios prompt, create a MissionState, and launch
         the CommandAgent as a background asyncio Task.
@@ -57,7 +57,7 @@ class MissionRunner:
         self._missions[mid] = state
 
         state.task = asyncio.create_task(
-            self._run(state, prompt),
+            self._run(state, prompt, online_mode),
             name=f"mission-{mid}",
         )
         return state
@@ -79,7 +79,7 @@ class MissionRunner:
 
     # ── internal ───────────────────────────────────────────────────────────────
 
-    async def _run(self, state: MissionState, prompt: str) -> None:
+    async def _run(self, state: MissionState, prompt: str, online_mode: bool = True) -> None:
         try:
             # Ensure agent package is importable
             agent_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "agent"))
@@ -143,6 +143,7 @@ class MissionRunner:
                 active_relays={},
                 rescue_directive=None,
                 mission_prompt=prompt,
+                online_mode=online_mode,
                 detected_survivors=[],
                 rescued_survivors=[],
                 phase="search",

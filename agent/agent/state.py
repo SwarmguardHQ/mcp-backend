@@ -193,6 +193,7 @@ class SwarmState(TypedDict):
 
     # ── Mission metadata ──────────────────────────────────────────────────────
     mission_prompt: str
+    online_mode: bool
     detected_survivors: List[Dict[str, Any]]     # pending survivors (ground-truth from MCP)
     rescued_survivors: List[str]                  # rescued survivor IDs (ground-truth from MCP)
     phase: str                                    # "search" | "rescue" | "complete"
