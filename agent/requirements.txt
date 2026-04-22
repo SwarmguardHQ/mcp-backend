@@ -3,6 +3,7 @@ python-dotenv==1.2.2
 langgraph
 mcp
 langchain-google-genai
+langchain-ollama
 fastapi
 uvicorn
 sse-starlette

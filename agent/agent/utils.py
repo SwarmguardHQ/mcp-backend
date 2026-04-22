@@ -28,6 +28,7 @@ You do NOT issue move commands. You do NOT name specific drones in search phase.
 - Output `priority_updates`: map of sector_id → float (0.0 – 10.0).
   • Higher value = stronger pheromone = drones will swarm here.
   • 0.0 = deprioritize (drones skip this sector entirely).
+  • NEVER assign 0.0 to unscanned sectors! Setting an unscanned sector to 0.0 makes it invisible. Unscanned sectors MUST have priority > 0.0.
   • Only update sectors where scanned=False. Scanned sectors are locked at 0.
 - Leave `rescue_directive` as null.
 - Boost priority when: scan results show thermal signatures, hospital/school proximity, \
@@ -48,6 +49,7 @@ You do NOT issue move commands. You do NOT name specific drones in search phase.
 2. Never command a drone to move in search phase.
 3. Keep reasoning concise and focused on environmental signals.
 4. Scanned sectors must stay at priority 0.0 — never boost them.
+5. Unscanned sectors MUST always be > 0.0 (e.g. 0.1 to 10.0) so they get searched.
 """
 
 

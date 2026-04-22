@@ -29,6 +29,7 @@ from typing import Union, Optional
 from langgraph.graph import END
 from langgraph.types import Send
 from langchain_google_genai import ChatGoogleGenerativeAI
+from langchain_ollama import ChatOllama
 
 from .state import SwarmState, StrategyOutput, Bid
 from .mcp.client import mcp_client
@@ -182,8 +183,12 @@ async def strategist_node(state: SwarmState) -> dict:
     # Rate-limit guard
     await asyncio.sleep(4.0)
 
-    llm = ChatGoogleGenerativeAI(model="gemini-3.1-flash-lite-preview", temperature=0)
-    # llm = ChatGoogleGenerativeAI(model="gemini-2.5-flash", temperature=0)
+    online_mode = state.get("online_mode", True)
+    if online_mode:
+        llm = ChatGoogleGenerativeAI(model="gemini-3.1-flash-lite-preview", temperature=0)
+        # llm = ChatGoogleGenerativeAI(model="gemini-2.5-flash", temperature=0)
+    else:
+        llm = ChatOllama(model="qwen2.5:0.5b", temperature=0)
     structured_llm = llm.with_structured_output(StrategyOutput)
 
     try:
