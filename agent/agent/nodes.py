@@ -521,7 +521,7 @@ async def resolve_bids_node(state: SwarmState) -> dict:
 
     The actual flight execution is handled by dispatch_winners → drone_agent_node.
     """
-    updates: dict = {"mission_log": [], "search_grid": {}, "bids": None}  # None clears via reducer
+    updates: dict = {"mission_log": [], "search_grid": {}, "bids": None, "_winning_bids": []}  # None clears via reducer
 
     all_bids: list = state.get("bids", [])
     if not all_bids:
@@ -648,6 +648,10 @@ async def drone_agent_node(state: dict) -> dict:
     distance = get_distance(drone["x"], drone["y"], tx, ty)
 
     # ── STEP 1: CONFIRM CLAIM (written by resolve_bids_node) ─────────────────
+    if state["search_grid"].get(target_sector, {}).get("scanned"):
+        updates["mission_log"].append(f"[{drone_id}] ⚠️ Sector '{target_sector}' is already scanned. Aborting redundant mission.")
+        return updates
+
     # The bidding resolver already wrote `claimed_by: drone_id` to search_grid,
     # so no racing is possible here. Just confirm and proceed to execution.
     updates["mission_log"].append(
@@ -839,9 +843,30 @@ async def drone_agent_node(state: dict) -> dict:
                     }
                     return updates
             else:
+                # Include the current drone itself if it also can't complete the mission;
+                # prevents it from claiming the same sector and failing every cycle.
+                drones_to_recharge = [
+                    d for d in state["drones"]
+                    if d["id"] not in already_relaying
+                    and not d.get("locked")
+                    and d.get("status") not in ("offline", "charging")
+                    and not d.get("payload")
+                    and d.get("battery", 100) < BATTERY_LOW_THRESHOLD + BATTERY_RESERVE_MIN
+                ]
+                for low_drone in drones_to_recharge:
+                    try:
+                        await mcp_client.session.call_tool(
+                            "return_to_charging_station",
+                            {"drone_id": low_drone["id"]}
+                        )
+                    except Exception as ex:
+                        updates["mission_log"].append(
+                            f"[{drone_id}] ⚠️ Recharge failed for {low_drone['id']}: {ex}"
+                        )
+
                 updates["mission_log"].append(
                     f"[{drone_id}] ⛔ No relay candidate available for {distance:.1f}-cell trip. "
-                    f"Releasing claim on '{target_sector}'."
+                    f"Releasing claim on '{target_sector}' until recharge complete."
                 )
                 updates["search_grid"][target_sector] = {
                     **state["search_grid"].get(target_sector, {}),
