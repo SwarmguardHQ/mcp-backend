@@ -25,7 +25,7 @@ async def run_mission(req: MissionRequest):
     Start a scenarios mission asynchronously.
     Returns immediately with a mission_id — use /stream or /status to follow along.
     """
-    state = runner.start(scenario=req.scenarios, custom_prompt=req.custom_prompt)
+    state = runner.start(scenario=req.scenarios, custom_prompt=req.custom_prompt, online_mode=req.online_mode)
     return MissionStarted(
         mission_id = state.mission_id,
         scenario   = state.scenario,

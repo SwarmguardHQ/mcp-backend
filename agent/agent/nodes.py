@@ -29,6 +29,7 @@ from typing import Union, Optional
 from langgraph.graph import END
 from langgraph.types import Send
 from langchain_google_genai import ChatGoogleGenerativeAI
+from langchain_ollama import ChatOllama
 
 from .state import SwarmState, StrategyOutput, Bid
 from .mcp.client import mcp_client
@@ -182,8 +183,12 @@ async def strategist_node(state: SwarmState) -> dict:
     # Rate-limit guard
     await asyncio.sleep(4.0)
 
-    llm = ChatGoogleGenerativeAI(model="gemini-3.1-flash-lite-preview", temperature=0)
-    # llm = ChatGoogleGenerativeAI(model="gemini-2.5-flash", temperature=0)
+    online_mode = state.get("online_mode", True)
+    if online_mode:
+        llm = ChatGoogleGenerativeAI(model="gemini-3.1-flash-lite-preview", temperature=0)
+        # llm = ChatGoogleGenerativeAI(model="gemini-2.5-flash", temperature=0)
+    else:
+        llm = ChatOllama(model="qwen2.5:0.5b", temperature=0)
     structured_llm = llm.with_structured_output(StrategyOutput)
 
     try:
@@ -610,7 +615,28 @@ async def drone_agent_node(state: dict) -> dict:
         mid_x = int((mcp_client.base_x + tx) / 2)
         mid_y = int((mcp_client.base_y + ty) / 2)
 
-        if drone_id in active_relays:
+        # Check if a relay is already sitting at the midpoint (shared relay)
+        existing_at_mid = next(
+            (d for d in state["drones"]
+             if d["id"] != drone_id and d["x"] == mid_x and d["y"] == mid_y
+             and not d.get("payload")),
+            None
+        )
+
+        if existing_at_mid:
+            if drone_id in active_relays and active_relays[drone_id] != existing_at_mid["id"]:
+                old_relay = active_relays[drone_id]
+                try:
+                    await mcp_client.session.call_tool("unlock_drone", {"drone_id": old_relay})
+                    updates["mission_log"].append(f"[{drone_id}] 🔓 Released old relay {old_relay} in favor of shared relay at midpoint.")
+                except Exception:
+                    pass
+            # Reuse it — lock it if not already locked
+            updates["active_relays"] = {**active_relays, drone_id: existing_at_mid["id"]}
+            updates["mission_log"].append(
+                f"[{drone_id}] 📡 Reusing shared relay {existing_at_mid['id']} at ({mid_x},{mid_y})."
+            )
+        elif drone_id in active_relays:
             # Dynamically reposition existing relay
             existing_relay = active_relays[drone_id]
             try:
@@ -682,21 +708,7 @@ async def drone_agent_node(state: dict) -> dict:
             ]
     
     
-            # Check if a relay is already sitting at the midpoint (shared relay)
-            existing_at_mid = next(
-                (d for d in state["drones"]
-                 if d["id"] != drone_id and d["x"] == mid_x and d["y"] == mid_y
-                 and not d.get("payload")),
-                None
-            )
-    
-            if existing_at_mid:
-                # Reuse it — lock it if not already locked
-                updates["active_relays"] = {**active_relays, drone_id: existing_at_mid["id"]}
-                updates["mission_log"].append(
-                    f"[{drone_id}] 📡 Reusing shared relay {existing_at_mid['id']} at ({mid_x},{mid_y})."
-                )
-            elif available_relay_drones:
+            if available_relay_drones:
                 # Deploy the drone with the lowest battery as relay (conserves high-battery drones)
                 relay_drone = min(available_relay_drones, key=lambda d: d.get("battery", 100))
                 _TEMP_LOCKED_RELAYS.add(relay_drone["id"])  # Reserves it from other concurrent runs
@@ -1053,7 +1065,28 @@ async def rescue_execution_node(state: SwarmState) -> dict:
             mid_x = int((mcp_client.base_x + far_dest[0]) / 2)
             mid_y = int((mcp_client.base_y + far_dest[1]) / 2)
             
-            if drone_id in active_relays:
+            # Check if a relay is already sitting at the midpoint (shared relay)
+            existing_at_mid = next(
+                (d for d in state["drones"]
+                 if d["id"] != drone_id and d["x"] == mid_x and d["y"] == mid_y
+                 and not d.get("payload")),
+                None
+            )
+
+            if existing_at_mid:
+                if drone_id in active_relays and active_relays[drone_id] != existing_at_mid["id"]:
+                    old_relay = active_relays[drone_id]
+                    try:
+                        await mcp_client.session.call_tool("unlock_drone", {"drone_id": old_relay})
+                        updates["mission_log"].append(f"[{drone_id}] 🔓 Released old relay {old_relay} in favor of shared relay at midpoint.")
+                    except Exception:
+                        pass
+                # Reuse it — lock it if not already locked
+                updates["active_relays"] = {**active_relays, drone_id: existing_at_mid["id"]}
+                updates["mission_log"].append(
+                    f"[{drone_id}] 📡 Reusing shared relay {existing_at_mid['id']} at ({mid_x},{mid_y})."
+                )
+            elif drone_id in active_relays:
                 existing_relay = active_relays[drone_id]
                 try:
                     await mcp_client.session.call_tool("unlock_drone", {"drone_id": existing_relay})
@@ -1115,21 +1148,7 @@ async def rescue_execution_node(state: SwarmState) -> dict:
                     )
                 ]
 
-                # Check if a relay is already sitting at the midpoint (shared relay)
-                existing_at_mid = next(
-                    (d for d in state["drones"]
-                    if d["id"] != drone_id and d["x"] == mid_x and d["y"] == mid_y
-                    and not d.get("payload")),
-                    None
-                )
-
-                if existing_at_mid:
-                    # Reuse it — lock it if not already locked
-                    updates["active_relays"] = {**active_relays, drone_id: existing_at_mid["id"]}
-                    updates["mission_log"].append(
-                        f"[{drone_id}] 📡 Reusing shared relay {existing_at_mid['id']} at ({mid_x},{mid_y})."
-                    )
-                elif available_relay_drones:
+                if available_relay_drones:
                     relay_drone = min(available_relay_drones, key=lambda d: d.get("battery", 100))
                     try:
                         relay_res = await mcp_client.session.call_tool(
