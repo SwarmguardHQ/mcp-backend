@@ -54,6 +54,10 @@ class MissionRequest(BaseModel):
         if v not in available:
             raise ValueError(f"Unknown scenarios '{v}'. Available: {available}")
         return v
+    
+    
+class OperatorOverrideRequest(BaseModel):
+    insight: str
 
 
 class ToolCallRequest(BaseModel):

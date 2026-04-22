@@ -24,14 +24,15 @@ INITIAL_FLEET = [
 INITIAL_SURVIVORS = [
     # Far deep zones (Requires mesh relay and heavy battery burn)
     {"id": "S1", "x": 12, "y": 13, "condition": "critical"},
-    {"id": "S2", "x": 13, "y": 12, "condition": "moderate"},
+    # {"id": "S2", "x": 13, "y": 12, "condition": "moderate"},
     {"id": "S3", "x": 2, "y": 16, "condition": "stable"},
     
     # Mid ranges
-    {"id": "S4", "x": 5, "y": 1, "condition": "critical"},
+    # {"id": "S4", "x": 5, "y": 1, "condition": "critical"},
     {"id": "S5", "x": 8, "y": 1, "condition": "moderate"},
     {"id": "S6", "x": 14, "y": 5, "condition": "stable"},
     
     # Close
     {"id": "S7", "x": 7, "y": 7, "condition": "stable"},
+    {"id": "S8", "x": 15, "y": 10, "condition": "critical"},
 ]

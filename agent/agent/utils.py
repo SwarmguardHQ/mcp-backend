@@ -29,7 +29,7 @@ You do NOT issue move commands. You do NOT name specific drones in search phase.
   • Higher value = stronger pheromone = drones will swarm here.
   • 0.0 = deprioritize (drones skip this sector entirely).
   • NEVER assign 0.0 to unscanned sectors! Setting an unscanned sector to 0.0 makes it invisible. Unscanned sectors MUST have priority > 0.0.
-  • Only update sectors where scanned=False. Scanned sectors are locked at 0.
+  • Normally, only update sectors where scanned=False. However, if there is an OPERATOR OVERRIDE asking to re-check an area, you MAY assign a priority > 0.0 to a scanned sector to un-scan it and force it to be searched again.
 - Leave `rescue_directive` as null.
 - Boost priority when: scan results show thermal signatures, hospital/school proximity, \
   or mission-critical zones remain unexplored.
@@ -58,10 +58,9 @@ You do NOT issue move commands. You do NOT name specific drones in search phase.
 # Priority rank is inverted when seeding GridCell.priority (rank 1 → 10.0).
 
 PRIORITY_MAP: Dict[str, Dict] = {
-    "sector_1": {"type": "School",      "priority": 1, "x": 5, "y": 2},
-    "sector_2": {"type": "Industrial",  "priority": 2, "x": 12, "y": 12},
-    "sector_3": {"type": "Residential", "priority": 3, "x": 2, "y": 16},
-    "sector_4": {"type": "Commercial",  "priority": 4, "x": 14, "y": 6},
+    "sector_1": {"type": "Industrial",  "priority": 1, "x": 12, "y": 12},
+    "sector_2": {"type": "School", "priority": 1, "x": 2, "y": 16},
+    "sector_3": {"type": "Residential",  "priority": 1, "x": 14, "y": 6},
 }
 
 
@@ -73,7 +72,36 @@ def priority_rank_to_float(rank: int) -> float:
     return (6 - rank) * 2.0
 
 
-# ── Core Math ─────────────────────────────────────────────────────────────────
+# ── Dynamic Sector Injection ──────────────────────────────────────────────────
+# Allows human-in-the-loop operator overrides to spawn new search targets
+# at arbitrary coordinates reported in real-time. Uses a module-level counter
+# to generate unique IDs so parallel requests never collide.
+
+_dynamic_sector_counter: int = 0
+
+def add_dynamic_sector(x: int, y: int, label: str = "Reported") -> str:
+    """
+    Inject a new sector at (x, y) into the live PRIORITY_MAP at runtime.
+    Returns the generated sector_id (e.g. 'sector_dynamic_1').
+
+    The new sector is assigned priority rank 1 (max urgency = 10.0 pheromone)
+    so the swarm dispatch router will always pick it over background sectors.
+    It is treated identically to any static sector by the relay math,
+    cost heuristic, and the strategist context builder.
+    """
+    global _dynamic_sector_counter
+    _dynamic_sector_counter += 1
+    sector_id = f"sector_dynamic_{_dynamic_sector_counter}"
+    PRIORITY_MAP[sector_id] = {
+        "type":     label,
+        "priority": 1,          # Rank 1 = highest urgency = pheromone 10.0
+        "x":        int(x),
+        "y":        int(y),
+        "dynamic":  True,       # Flag to distinguish from static sectors
+    }
+    return sector_id
+
+
 
 def get_distance(x1: float, y1: float, x2: float, y2: float) -> float:
     """Euclidean (Pythagorean) distance between two grid points."""
@@ -121,6 +149,25 @@ def build_strategist_context(state: SwarmState) -> str:
     lines: List[str] = [STRATEGIST_PERSONA, ""]
     lines.append(f"## SWARM STATUS REPORT — Phase: {phase.upper()}")
     lines.append(f"**Mission:** {state.get('mission_prompt', '')[:300]}")
+
+    # ── Human-in-the-loop override ─────────────────────────────────────────────
+    # If the operator submitted an insight, show it as a RED ALERT banner FIRST
+    # so the LLM immediately rebuilds its pheromone priorities around it.
+    human_override = state.get("human_override")
+    if human_override:
+        lines.append(f"""
+        > ## 🚨 OPERATOR OVERRIDE — HIGHEST PRIORITY SIGNAL
+        > **Operator Insight:** "{human_override}"
+        >
+        > You MUST treat this as authoritative ground intelligence.
+        > Immediately re-evaluate ALL sector priorities and rebuild the pheromone map
+        > to redirect the swarm toward the area or threat described above.
+        > Boost relevant sectors to 10.0. Drop irrelevant sectors.
+        > If the operator mentions re-checking a previously scanned sector, you MUST assign it a priority > 0.0 to un-scan it and force a re-search!
+        > This overrides your normal heuristics for this cycle only.
+        """)
+
+
 
     # ── Pheromone map ──────────────────────────────────────────────────────────
     lines.append("\n### SECTOR PHEROMONE MAP")

@@ -16,6 +16,22 @@ class SirenMCPClient:
         # frontend sees each individual action as it completes, not as a batch.
         self._on_step_complete: Optional[Callable[[], Awaitable[None]]] = None
 
+        # ── Human-in-the-loop override ─────────────────────────────────────────
+        # Set by the API endpoint when an operator submits a real-time insight.
+        # Consumed (once) by safety_governor_node on the next cycle, injected
+        # into SwarmState.human_override, then cleared so it does not repeat.
+        self.pending_override: Optional[str] = None
+
+    def set_override(self, text: str) -> None:
+        """Called by the API to inject an operator insight into the next swarm cycle."""
+        self.pending_override = text.strip()
+
+    def consume_override(self) -> Optional[str]:
+        """Called by safety_governor_node — pops and returns the pending override (one-shot)."""
+        text = self.pending_override
+        self.pending_override = None
+        return text
+
     def set_session(self, session: ClientSession):
         self.session = session
 
