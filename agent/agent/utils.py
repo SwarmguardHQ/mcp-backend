@@ -60,8 +60,8 @@ You do NOT issue move commands. You do NOT name specific drones in search phase.
 PRIORITY_MAP: Dict[str, Dict] = {
     "sector_1": {"type": "School",      "priority": 1, "x": 5, "y": 2},
     "sector_2": {"type": "Industrial",  "priority": 2, "x": 12, "y": 12},
-    "sector_3": {"type": "Residential", "priority": 3, "x": 2, "y": 16},
-    "sector_4": {"type": "Commercial",  "priority": 4, "x": 14, "y": 6},
+    "sector_3": {"type": "Residential", "priority": 1, "x": 2, "y": 16},
+    "sector_4": {"type": "Commercial",  "priority": 2, "x": 14, "y": 6},
 }
 
 
