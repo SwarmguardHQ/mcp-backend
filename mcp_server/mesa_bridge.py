@@ -146,7 +146,7 @@ def _mesa_status_from_world(status: str) -> str:
     s = (status or "idle").lower()
     if s == "flying":
         return "active"
-    if s == "returning":
+    if s == "relay":
         return "recalled"
     if s == "delivering":
         return "active"
@@ -166,7 +166,7 @@ def _world_status_from_mesa(status: str) -> str:
     if s in ("scanning", "active"):
         return DroneStatus.SCANNING.value
     if s == "recalled":
-        return DroneStatus.RETURNING.value
+        return DroneStatus.RELAY.value
     if s == "critical":
         return DroneStatus.IDLE.value
     return DroneStatus.IDLE.value

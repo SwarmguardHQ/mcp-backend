@@ -25,17 +25,17 @@ Key design decisions:
 
 import asyncio
 import json
-from typing import Union
+from typing import Union, Optional
 from langgraph.graph import END
 from langgraph.types import Send
 from langchain_google_genai import ChatGoogleGenerativeAI
 
-from .state import SwarmState, StrategyOutput
+from .state import SwarmState, StrategyOutput, Bid
 from .mcp.client import mcp_client
 from .utils import (
     get_distance,
     PRIORITY_MAP,
-    assign_sectors_to_drones,
+    compute_drone_sector_cost,
     estimate_signal,
     build_strategist_context,
 )
@@ -111,7 +111,7 @@ async def safety_governor_node(state: SwarmState) -> dict:
                 )
                 updates["mission_log"].append(
                     f"[GOVERNOR] ⚡ BATTERY EMERGENCY: {drone['id']} at {drone['battery']}% — "
-                    f"commanded to return to base."
+                    f"commanded to return to nearest charging station."
                 )
             except Exception as e:
                 updates["mission_log"].append(f"[GOVERNOR] Return command failed for {drone['id']}: {e}")
@@ -225,18 +225,21 @@ async def strategist_node(state: SwarmState) -> dict:
     return updates
 
 
-# ── 3. Dispatch Router (Swarm Fan-out) ────────────────────────────────────────
+# ── 3. Broadcast Tasks (Swarm Fan-out — Phase Router) ─────────────────────────
 
-def dispatch_drones(state: SwarmState) -> Union[str, list]:
+def broadcast_tasks(state: SwarmState) -> Union[str, list]:
     """
     Routing function called after strategist_node.
 
-    SEARCH phase: Pre-assigns sectors to idle drones using Pythagorean cost,
-    then fans out via LangGraph Send for true parallel execution.
+    SEARCH phase (True Swarm Intelligence — Contract Net Protocol):
+      Instead of assigning sectors centrally, we fan out to ALL idle drones
+      simultaneously. Each drone will independently evaluate the environment,
+      compute its own cost to every open sector, and submit a bid.
+      The bid resolver then picks the winners.
 
     RESCUE phase: Routes to rescue_execution_node.
 
-    If nothing to do, falls through to join_node.
+    If no idle drones or no open sectors, falls through to join_node.
     """
     phase = state.get("phase", "search")
 
@@ -244,73 +247,316 @@ def dispatch_drones(state: SwarmState) -> Union[str, list]:
         directive = state.get("rescue_directive")
         if directive:
             return "rescue_execution_node"
-        # No directive yet — loop back to governor
         return "join_node"
 
-    # Pure-Python sector → drone assignment (Pythagorean cost)
-    assignments, skipped_logs = assign_sectors_to_drones(
-        state["drones"], state["search_grid"], PRIORITY_MAP
-    )
+    # Check for open sectors (unclaimed, unscanned, pheromone > 0)
+    open_sectors = [
+        sid for sid, cell in state["search_grid"].items()
+        if cell.get("priority", 0.0) > 0.0
+        and not cell.get("claimed_by")
+        and not cell.get("scanned")
+    ]
 
-    # Log relay-shortage bottlenecks so the LLM Strategist knows why missions are skipped
-    for log_msg in skipped_logs:
-        state["mission_log"].append(f"[DISPATCH] {log_msg}")
+    remaining_sector = [sid for sid, cell in state["search_grid"].items() if not cell.get("scanned")]
 
-    if not assignments:
-        # All drones busy or sectors all claimed — check back next cycle
-        remaining = [
-            sid for sid, cell in state["search_grid"].items()
-            if not cell.get("scanned")
-        ]
-        if remaining:
-            state["mission_log"].append(
-                f"[DISPATCH] 🔄 No idle drones available. {len(remaining)} sector(s) pending: {remaining}"
-            )
-        return "join_node"
-
-    # Fan-out: each idle drone gets its own parallel drone_agent_node execution
-    sends = []
-    assigned_team = list(assignments.keys())
-    _TEMP_LOCKED_RELAYS.clear()  # Reset the concurrent lock pool
-
-    for drone_id, target_sector in assignments.items():
-        sends.append(
-            Send(
-                "drone_agent_node",
-                {
-                    # Inject task-specific keys alongside the full shared state
-                    "drone_id":      drone_id,
-                    "target_sector": target_sector,
-                    "assigned_team": assigned_team,
-                    # Spread full SwarmState for read-only access in the drone node
-                    **state,
-                },
-            )
+    if not open_sectors and remaining_sector:
+        state["mission_log"].append(
+            f"[BROADCAST] 🔄 No open sectors (all claimed or zero-priority). "
+            f"{len(remaining_sector)} sector(s) in progress."
         )
+        return "join_node"
+
+    # Find idle drones eligible to bid
+    idle_drones = [
+        d for d in state["drones"]
+        if d.get("status") == "idle"
+        and not d.get("locked")
+        and not d.get("payload")
+        and d.get("battery", 0) > BATTERY_RESERVE_MIN
+    ]
+
+    if not idle_drones and remaining_sector:
+        state["mission_log"].append(
+            f"[BROADCAST] 🔄 No idle drones available. {len(remaining_sector)} sector(s) pending: {remaining_sector}"
+        )
+        return "join_node"
+
+    _TEMP_LOCKED_RELAYS.clear()  # Reset concurrent relay lock pool for this cycle
+
+    # Fan-out: each idle drone independently evaluates the environment
+    sends = [
+        Send(
+            "drone_bidding_node",
+            {
+                "drone_id": d["id"],
+                **state,
+                "bids": [],  # Start each bidding round with a clean slate
+            },
+        )
+        for d in idle_drones
+    ]
     state["mission_log"].append(
-        f"[DISPATCH] 🚁 Dispatching {len(sends)} drone(s): "
-        + ", ".join(f"{did}→{sec}" for did, sec in assignments.items())
+        f"[BROADCAST] 📡 Announcing {len(open_sectors)} open sector(s) to "
+        f"{len(idle_drones)} idle drone(s). Let them bid!"
     )
     return sends
 
 
-# ── 4. Drone Agent Node (Pure Python — The Local Brain) ───────────────────────
+# ── 4. Drone Bidding Node (Autonomous Self-Evaluation) ──────────────────────
+
+async def drone_bidding_node(state: dict) -> dict:
+    """
+    Autonomous bidding — NO LLM.
+
+    Each drone runs this node in parallel. It independently:
+      1. Scans the environment (pheromone map + search_grid)
+      2. Filters sectors it can physically reach given its battery
+      3. Computes its own Pythagorean cost for each candidate sector
+      4. Checks if a relay is needed and if any peer is available
+      5. Submits its single lowest-cost bid to the shared `bids` list
+
+    The resolver (`resolve_bids_node`) will pick winners from all submitted bids.
+    The drone does NOT self-assign — it only *claims interest*.
+
+    Returns state diffs only — LangGraph reducers merge them back.
+    """
+    drone_id = state["drone_id"]
+    drone    = next((d for d in state["drones"] if d["id"] == drone_id), None)
+    updates: dict = {"mission_log": [], "bids": []}
+
+    if not drone:
+        updates["mission_log"].append(f"[{drone_id}] ❌ Not found in state during bidding.")
+        return updates
+
+    # ── Candidate sectors: open (unclaimed, unscanned, priority > 0) ──────────
+    open_sectors = [
+        (sid, cell)
+        for sid, cell in state["search_grid"].items()
+        if cell.get("priority", 0.0) > 0.0
+        and not cell.get("claimed_by")
+        and not cell.get("scanned")
+    ]
+
+    if not open_sectors:
+        updates["mission_log"].append(f"[{drone_id}] 💤 No open sectors to bid on.")
+        return updates
+
+    # ── Evaluate feasibility & compute cost for each candidate ────────────────
+    best_bid: Optional[Bid] = None
+    best_bid_priority: float = -1.0
+
+    for sector_id, cell in open_sectors:
+        sector_data  = PRIORITY_MAP.get(sector_id, {})
+        sx, sy       = sector_data.get("x", 0), sector_data.get("y", 0)
+        distance     = get_distance(drone["x"], drone["y"], sx, sy)
+        battery_needed = int(distance * BATTERY_COST_PER_CELL) + BATTERY_RESERVE_MIN
+
+        # ── Hard constraint 1: battery sufficiency ─────────────────────────────
+        if drone["battery"] < battery_needed:
+            updates["mission_log"].append(
+                f"[{drone_id}] ⚡ Cannot afford '{sector_id}' "
+                f"({battery_needed}% needed, {drone['battery']}% available). Skipping."
+            )
+            continue
+
+        # ── Hard constraint 2: relay availability check ────────────────────────
+        dist_to_base = get_distance(sx, sy, mcp_client.base_x, mcp_client.base_y)
+        if dist_to_base > 10:
+            if drone_id not in state.get("active_relays", {}):
+                mid_x = int((mcp_client.base_x + sx) / 2)
+                mid_y = int((mcp_client.base_y + sy) / 2)
+                
+                # Check for existing shared relay at midpoint
+                existing_at_mid = next(
+                    (d for d in state["drones"]
+                     if d["id"] != drone_id and d["x"] == mid_x and d["y"] == mid_y
+                     and not d.get("payload")),
+                    None
+                )
+                
+                if not existing_at_mid:
+                    # Relay required — verify a peer drone exists that could act as relay
+                    already_relaying = set(state.get("active_relays", {}).values())
+                    relay_peers = [
+                        d for d in state["drones"]
+                        if d["id"] != drone_id
+                        and d["id"] not in already_relaying
+                        and d["id"] not in _TEMP_LOCKED_RELAYS
+                        and not d.get("locked")
+                        and d.get("status") not in ("offline", "charging")
+                        and not d.get("payload")
+                        and d.get("battery", 0) >= (
+                            int(get_distance(d["x"], d["y"], mid_x, mid_y) * BATTERY_COST_PER_CELL)
+                            + BATTERY_RESERVE_MIN
+                        )
+                    ]
+                    if not relay_peers:
+                        updates["mission_log"].append(
+                            f"[{drone_id}] ⛔ '{sector_id}' requires relay but no peer available with enough battery. Skipping."
+                        )
+                        continue
+
+        # ── Self-evaluate: compute Pythagorean cost ────────────────────────────
+        cost     = compute_drone_sector_cost(drone, sector_id)
+        priority = cell.get("priority", 0.0)
+
+        # Prefer sectors with higher pheromone; break ties by lowest cost
+        if priority > best_bid_priority or (priority == best_bid_priority and (best_bid is None or cost < best_bid["cost"])):
+            best_bid_priority = priority
+            best_bid = Bid(drone_id=drone_id, sector_id=sector_id, cost=cost)
+
+    if best_bid:
+        updates["bids"].append(best_bid)
+        updates["mission_log"].append(
+            f"[{drone_id}] 🙋 BID submitted for '{best_bid['sector_id']}' "
+            f"(cost={best_bid['cost']:.2f}, priority={best_bid_priority:.1f})"
+        )
+    else:
+        # If no viable sectors, drone will return to base to recharge to ensure it can bid task next round
+        if drone.get("battery", 0) <= 95:
+            try:
+                await mcp_client.session.call_tool(
+                    "return_to_charging_station", {"drone_id": drone_id}
+                )
+                updates["mission_log"].append(
+                    f"[{drone_id}] 🤷 No viable sectors. 🔋 Auto-recharge triggered (Battery: {drone.get('battery')}%). "
+                    f"Breaking rescue deadlock"
+                )
+            except Exception:
+                updates["mission_log"].append(
+                    f"[{drone_id}] 🤷 No viable sector found to bid on."
+                )
+        else:
+            updates["mission_log"].append(
+                f"[{drone_id}] 🤷 No viable sector found to bid on."
+            )
+
+    return updates
+
+
+# ── 5. Resolve Bids Node (Conflict Arbitration — Central for one tick) ────────
+
+async def resolve_bids_node(state: SwarmState) -> dict:
+    """
+    Runs ONCE after all parallel drone_bidding_node executions reconverge.
+
+    Contract Net Resolution:
+      1. Groups bids by sector.
+      2. Highest-priority sector is served first.
+      3. Within a sector, the drone with the lowest cost wins (best fit).
+      4. Each drone and each sector can only appear in one assignment.
+      5. Winning drones get `claimed_by` written to search_grid.
+      6. Clears the bids list from state.
+
+    The actual flight execution is handled by dispatch_winners → drone_agent_node.
+    """
+    updates: dict = {"mission_log": [], "search_grid": {}, "bids": None}  # None clears via reducer
+
+    all_bids: list = state.get("bids", [])
+    if not all_bids:
+        updates["mission_log"].append("[RESOLVE] No bids received this cycle.")
+        return updates
+
+    updates["mission_log"].append(f"[RESOLVE] 📥 Received {len(all_bids)} bid(s). Arbitrating...")
+
+    # Group bids by sector, keeping track of each sector's pheromone priority
+    sector_bids: dict = {}  # sector_id → list of bids
+    for bid in all_bids:
+        sector_bids.setdefault(bid["sector_id"], []).append(bid)
+
+    # Sort sectors by pheromone priority (highest first — strongest signal wins)
+    sorted_sectors = sorted(
+        sector_bids.keys(),
+        key=lambda sid: state["search_grid"].get(sid, {}).get("priority", 0.0),
+        reverse=True,
+    )
+
+    won_drones:   set = set()  # Each drone can only win once
+    won_sectors:  set = set()  # Each sector can only be claimed once
+    winning_bids: list = []
+
+    for sector_id in sorted_sectors:
+        if sector_id in won_sectors:
+            continue
+        bids_for_sector = [
+            b for b in sector_bids[sector_id] if b["drone_id"] not in won_drones
+        ]
+        if not bids_for_sector:
+            continue  # All bidders for this sector already won another sector
+
+        # Winner = lowest cost bidder (most physically fit drone for this task)
+        winner = min(bids_for_sector, key=lambda b: b["cost"])
+        won_drones.add(winner["drone_id"])
+        won_sectors.add(sector_id)
+        winning_bids.append(winner)
+
+        # Write the claim to the shared pheromone map
+        existing_cell = state["search_grid"].get(sector_id, {})
+        updates["search_grid"][sector_id] = {
+            **existing_cell,
+            "claimed_by": winner["drone_id"],
+        }
+        updates["mission_log"].append(
+            f"[RESOLVE] ✅ '{sector_id}' awarded to {winner['drone_id']} (cost={winner['cost']:.2f})"
+        )
+
+    # Store winning assignments for dispatch_winners to read
+    updates["_winning_bids"] = winning_bids
+
+    if not winning_bids:
+        updates["mission_log"].append("[RESOLVE] ⚠️ No bids could be resolved (all blocked by constraints).")
+    else:
+        updates["mission_log"].append(
+            f"[RESOLVE] 🏆 {len(winning_bids)} drone(s) awarded tasks: "
+            + ", ".join(f"{b['drone_id']}→{b['sector_id']}" for b in winning_bids)
+        )
+
+    return updates
+
+
+def dispatch_winners(state: SwarmState) -> Union[str, list]:
+    """
+    Edge function after resolve_bids_node.
+    Fans out the winning drones to drone_agent_node for actual execution.
+    Falls through to join_node if no winners.
+    """
+    winning_bids = state.get("_winning_bids", [])
+
+    if not winning_bids:
+        return "join_node"
+
+    sends = [
+        Send(
+            "drone_agent_node",
+            {
+                "drone_id":      bid["drone_id"],
+                "target_sector": bid["sector_id"],
+                "assigned_team": [b["drone_id"] for b in winning_bids],
+                **state,
+            },
+        )
+        for bid in winning_bids
+    ]
+    return sends
+
+
+# ── 6. Drone Agent Node (Pure Python — The Execution Brain) ───────────────────
 
 async def drone_agent_node(state: dict) -> dict:
     """
     Autonomous drone execution — NO LLM.
 
-    Receives: full SwarmState dict PLUS injected keys:
+    Receives: full SwarmState dict PLUS injected keys from dispatch_winners:
       - drone_id:      which physical drone we are
-      - target_sector: which sector we have been pre-assigned
+      - target_sector: the sector this drone WON during the bidding phase
+                       (already written to search_grid.claimed_by by resolve_bids_node)
 
     Loop:
-      1. CLAIM    — mark sector as claimed_by this drone (prevents racing)
-      2. BATTERY  — verify we can afford the trip; abort to base if not
-      3. RELAY    — if target > 10 cells away from base (0,0), deploy a relay drone first
-      4. MOVE     — call move_to MCP tool (Pythagorean path already computed)
-      5. SCAN     — call thermal_scan MCP tool
-      6. COMPLETE — set priority=0, claimed_by=None, scanned=True
+      1. BATTERY  — verify we can still afford the trip (state may have aged)
+      2. RELAY    — if target > 10 cells from base, deploy a relay drone
+      3. MOVE     — call move_to MCP tool
+      4. SCAN     — call thermal_scan MCP tool
+      5. COMPLETE — set priority=0, claimed_by=None, scanned=True
 
     Returns state diffs only — LangGraph reducers merge them back.
     """
@@ -330,22 +576,19 @@ async def drone_agent_node(state: dict) -> dict:
     tx, ty = sector_data.get("x", 0), sector_data.get("y", 0)
     distance = get_distance(drone["x"], drone["y"], tx, ty)
 
-    # ── STEP 1: CLAIM ──────────────────────────────────────────────────────────
-    updates["search_grid"][target_sector] = {
-        "priority":   state["search_grid"].get(target_sector, {}).get("priority", 1.0),
-        "claimed_by": drone_id,
-        "scanned":    False,
-    }
+    # ── STEP 1: CONFIRM CLAIM (written by resolve_bids_node) ─────────────────
+    # The bidding resolver already wrote `claimed_by: drone_id` to search_grid,
+    # so no racing is possible here. Just confirm and proceed to execution.
     updates["mission_log"].append(
-        f"[{drone_id}] ✋ Claiming '{target_sector}' at ({tx},{ty}). "
+        f"[{drone_id}] ✅ Executing won claim on '{target_sector}' at ({tx},{ty}). "
         f"Distance: {distance:.1f} cells. Battery: {drone['battery']}%."
     )
 
-    # ── STEP 2: BATTERY CHECK ─────────────────────────────────────────────────
+    # ── STEP 2: BATTERY RE-CHECK (state may have aged since bidding) ──────────
     battery_needed = int(distance * BATTERY_COST_PER_CELL) + BATTERY_RESERVE_MIN
     if drone["battery"] < battery_needed:
         updates["mission_log"].append(
-            f"[{drone_id}] ⚡ Insufficient battery ({drone['battery']}% < "
+            f"[{drone_id}] ⚡ Battery drained since bidding ({drone['battery']}% < "
             f"{battery_needed}% needed for '{target_sector}'). Releasing claim, returning to base."
         )
         updates["search_grid"][target_sector] = {
@@ -375,18 +618,49 @@ async def drone_agent_node(state: dict) -> dict:
                 move_res = await mcp_client.session.call_tool(
                     "move_to", {"drone_id": existing_relay, "x": mid_x, "y": mid_y}
                 )
-                await mcp_client.session.call_tool("lock_drone", {"drone_id": existing_relay})
-                
+
                 res_text = move_res.content[0].text
                 if "error" in res_text.lower():
                     raise RuntimeError(f"Relocate failed: {res_text}")
-                    
+
                 updates["mission_log"].append(
                     f"[{drone_id}] 📡 Relocated existing relay {existing_relay} to optimal midpoint ({mid_x},{mid_y})"
                 )
+                
+                # Relay stationary scan
+                scan_res = await mcp_client.session.call_tool("thermal_scan", {"drone_id": existing_relay})
+                scan_text = scan_res.content[0].text
+                updates["mission_log"].append(f"[{existing_relay}] 🔍 Relay drone is executing thermal_scan: {scan_text[:200]}")
+                
+                await mcp_client.session.call_tool("lock_drone", {"drone_id": existing_relay})
+                    
+                try:
+                    scan_data = json.loads(scan_text)
+                    newly_found = scan_data.get("survivors_detected", [])
+
+                    for s in newly_found:
+                        sid = s.get("survivor_id")
+                        if sid:
+                            updates["mission_log"].append(
+                                f"[{existing_relay}] 🆘 DETECTED {sid} at "
+                                f"({s['position']['x']},{s['position']['y']}) "
+                                f"[{s.get('condition','?').upper()}]"
+                            )
+                except Exception:
+                    pass
                 await mcp_client.step_sync()
             except Exception as e:
                 updates["mission_log"].append(f"[{drone_id}] ⚠️ Relay relocation failed: {e}")
+                # Unbind the active_relays to prevent always sticking to the active_relays that low battery
+                # (Unable to move to the midpoint)
+                if "active_relays" not in updates:
+                    updates["active_relays"] = {}
+                updates["active_relays"][drone_id] = None
+                updates["search_grid"][target_sector] = {
+                    **state["search_grid"].get(target_sector, {}),
+                    "claimed_by": None,
+                }
+                return updates
         else:
             # Already-committed relays in this snapshot: exclude them so two
             # parallel drone agents never try to lock the same physical drone.
@@ -432,9 +706,29 @@ async def drone_agent_node(state: dict) -> dict:
                         "move_to", {"drone_id": relay_drone["id"], "x": mid_x, "y": mid_y}
                     )
                     relay_text = relay_res.content[0].text
+
                     updates["mission_log"].append(
                         f"[{drone_id}] 📡 Relay {relay_drone['id']} deployed to ({mid_x},{mid_y}): {relay_text}"
                     )
+                    
+                    # Relay stationary scan
+                    scan_res = await mcp_client.session.call_tool("thermal_scan", {"drone_id": relay_drone["id"]})
+                    scan_text = scan_res.content[0].text
+                    updates["mission_log"].append(f"[{relay_drone['id']}] 🔍 Relay drone is executing thermal_scan: {scan_text[:200]}")
+                    
+                    try:
+                        scan_data = json.loads(scan_text)
+                        newly_found = scan_data.get("survivors_detected", [])
+                        for s in newly_found:
+                            sid = s.get("survivor_id")
+                            if sid:
+                                updates["mission_log"].append(
+                                    f"[{relay_drone['id']}] 🆘 DETECTED {sid} at "
+                                    f"({s['position']['x']},{s['position']['y']}) "
+                                    f"[{s.get('condition','?').upper()}]"
+                                )
+                    except Exception:
+                        pass
     
                     if "error" in relay_text.lower():
                         raise RuntimeError(f"Relay move failed: {relay_text}")
@@ -503,7 +797,6 @@ async def drone_agent_node(state: dict) -> dict:
         return updates
 
     # ── STEP 5: THERMAL SCAN ──────────────────────────────────────────────────
-    survivor_detections: list = []
     try:
         scan_res  = await mcp_client.session.call_tool("thermal_scan", {"drone_id": drone_id})
         scan_text = scan_res.content[0].text
@@ -519,12 +812,6 @@ async def drone_agent_node(state: dict) -> dict:
             for s in newly_found:
                 sid = s.get("survivor_id")
                 if sid:
-                    survivor_detections.append({
-                        "id":        sid,
-                        "x":         s["position"]["x"],
-                        "y":         s["position"]["y"],
-                        "condition": s.get("condition", "unknown"),
-                    })
                     updates["mission_log"].append(
                         f"[{drone_id}] 🆘 DETECTED {sid} at "
                         f"({s['position']['x']},{s['position']['y']}) "
@@ -773,16 +1060,45 @@ async def rescue_execution_node(state: SwarmState) -> dict:
                     move_res = await mcp_client.session.call_tool(
                         "move_to", {"drone_id": existing_relay, "x": mid_x, "y": mid_y}
                     )
-                    await mcp_client.session.call_tool("lock_drone", {"drone_id": existing_relay})
-                    
+
                     res_text = move_res.content[0].text
-                    if "error" not in res_text.lower():
-                        updates["mission_log"].append(
-                            f"[RESCUE] 📡 Relocated existing Mesh Relay {existing_relay} to optimal midpoint ({mid_x},{mid_y})"
-                        )
-                        await mcp_client.step_sync()
+                    if "error" in res_text.lower():
+                        raise RuntimeError(f"Relocate failed: {res_text}")
+
+                    updates["mission_log"].append(
+                        f"[{drone_id}] 📡 Relocated existing relay {existing_relay} to optimal midpoint ({mid_x},{mid_y})"
+                    )
+
+                    # Relay stationary scan
+                    scan_res = await mcp_client.session.call_tool("thermal_scan", {"drone_id": existing_relay})
+                    scan_text = scan_res.content[0].text
+                    updates["mission_log"].append(f"[{existing_relay}] 🔍 Relay drone is executing thermal_scan: {scan_text[:200]}")
+
+                    try:
+                        scan_data = json.loads(scan_text)
+                        newly_found = scan_data.get("survivors_detected", [])
+
+                        for s in newly_found:
+                            sid = s.get("survivor_id")
+                            if sid:
+                                updates["mission_log"].append(
+                                    f"[{existing_relay}] 🆘 DETECTED {sid} at "
+                                    f"({s['position']['x']},{s['position']['y']}) "
+                                    f"[{s.get('condition','?').upper()}]"
+                                )
+                    except Exception:
+                        pass
+
+                    await mcp_client.session.call_tool("lock_drone", {"drone_id": existing_relay})
+                    await mcp_client.step_sync()
                 except Exception as e:
-                    pass
+                    updates["mission_log"].append(f"[{drone_id}] ⚠️ Relay relocation failed: {e}. Directive dropped.")
+                    # Unbind the active_relays to prevent always sticking to the active_relays that low battery
+                    # (Unable to move to the midpoint)
+                    if "active_relays" not in updates:
+                        updates["active_relays"] = {}
+                    updates["active_relays"][drone_id] = None
+                    return updates
             else:
                 already_relaying = set(active_relays.values())
 
@@ -798,20 +1114,61 @@ async def rescue_execution_node(state: SwarmState) -> dict:
                         + BATTERY_RESERVE_MIN
                     )
                 ]
-                if available_relay_drones:
+
+                # Check if a relay is already sitting at the midpoint (shared relay)
+                existing_at_mid = next(
+                    (d for d in state["drones"]
+                    if d["id"] != drone_id and d["x"] == mid_x and d["y"] == mid_y
+                    and not d.get("payload")),
+                    None
+                )
+
+                if existing_at_mid:
+                    # Reuse it — lock it if not already locked
+                    updates["active_relays"] = {**active_relays, drone_id: existing_at_mid["id"]}
+                    updates["mission_log"].append(
+                        f"[{drone_id}] 📡 Reusing shared relay {existing_at_mid['id']} at ({mid_x},{mid_y})."
+                    )
+                elif available_relay_drones:
                     relay_drone = min(available_relay_drones, key=lambda d: d.get("battery", 100))
                     try:
                         relay_res = await mcp_client.session.call_tool(
                             "move_to", {"drone_id": relay_drone["id"], "x": mid_x, "y": mid_y}
                         )
-                        await mcp_client.session.call_tool("lock_drone", {"drone_id": relay_drone["id"]})
+                        res_text = relay_res.content[0].text
+                        if "error" in res_text.lower():
+                            raise RuntimeError(f"Relocate failed: {res_text}")
+
                         updates["mission_log"].append(
-                            f"[RESCUE] 📡 Mesh Relay {relay_drone['id']} deployed to ({mid_x},{mid_y}): {relay_res.content[0].text}"
+                            f"[RESCUE] 📡 Relay {relay_drone['id']} deployed to ({mid_x},{mid_y}): {res_text}"
                         )
+
+                        # Relay stationary scan
+                        scan_res = await mcp_client.session.call_tool("thermal_scan", {"drone_id": relay_drone["id"]})
+                        scan_text = scan_res.content[0].text
+                        updates["mission_log"].append(f"[{relay_drone['id']}] 🔍 Relay drone is executing thermal_scan: {scan_text[:200]}")
+
+                        try:
+                            scan_data = json.loads(scan_text)
+                            newly_found = scan_data.get("survivors_detected", [])
+
+                            for s in newly_found:
+                                sid = s.get("survivor_id")
+                                if sid:
+                                    updates["mission_log"].append(
+                                        f"[{relay_drone['id']}] 🆘 DETECTED {sid} at "
+                                        f"({s['position']['x']},{s['position']['y']}) "
+                                        f"[{s.get('condition','?').upper()}]"
+                                    )
+                        except Exception:
+                            pass
+
+                        await mcp_client.session.call_tool("lock_drone", {"drone_id": relay_drone["id"]})
                         updates["active_relays"] = {**active_relays, drone_id: relay_drone["id"]}
                         await mcp_client.step_sync()
                     except Exception as e:
-                        updates["mission_log"].append(f"[RESCUE] ⚠️ Relay deploy failed: {e}")
+                        updates["mission_log"].append(f"[RESCUE] ⚠️ Relay deploy failed: {e}. Directive dropped.")
+                        return updates
                 else:
                     updates["mission_log"].append(
                         f"[RESCUE] ⚠️ No relay available for {max_dist_from_base:.1f}-cell trip to "

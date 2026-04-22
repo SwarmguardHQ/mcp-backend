@@ -2,7 +2,7 @@
 Shared utilities for the SIREN swarm agent.
 
   - assign_sectors_to_drones():     pure-Python Pythagorean assignment
-  - _compute_drone_sector_cost():    distance / battery cost metric
+  - compute_drone_sector_cost():    distance / battery cost metric
   - estimate_signal():              signal-strength heuristic by distance from base
   - build_strategist_context():     formats the LLM prompt for strategist_node
 """
@@ -56,15 +56,10 @@ You do NOT issue move commands. You do NOT name specific drones in search phase.
 # Priority rank is inverted when seeding GridCell.priority (rank 1 → 10.0).
 
 PRIORITY_MAP: Dict[str, Dict] = {
-    "sector_1": {"type": "School",      "priority": 2, "x": 5, "y": 2},
-    "sector_2": {"type": "Hospital",    "priority": 1, "x": 8, "y": 5},
-    "sector_3": {"type": "Generic",     "priority": 5, "x": 1, "y": 1},
-    "sector_4": {"type": "Commercial",  "priority": 4, "x": 2, "y": 2},
-    "sector_5": {"type": "Residential", "priority": 2, "x": 2, "y": 8},
-    "sector_6": {"type": "Industrial",  "priority": 3, "x": 12, "y": 12},
-    "sector_7": {"type": "Residential", "priority": 2, "x": 2, "y": 16},
-    "sector_8": {"type": "Commercial",  "priority": 4, "x": 14, "y": 5},
-    "sector_9": {"type": "Generic",     "priority": 5, "x": 8, "y": 14},
+    "sector_1": {"type": "School",      "priority": 1, "x": 5, "y": 2},
+    "sector_2": {"type": "Industrial",  "priority": 2, "x": 12, "y": 12},
+    "sector_3": {"type": "Residential", "priority": 3, "x": 2, "y": 16},
+    "sector_4": {"type": "Commercial",  "priority": 4, "x": 14, "y": 6},
 }
 
 
@@ -83,7 +78,7 @@ def get_distance(x1: float, y1: float, x2: float, y2: float) -> float:
     return math.sqrt((x2 - x1) ** 2 + (y2 - y1) ** 2)
 
 
-def _compute_drone_sector_cost(drone: dict, sector_id: str) -> float:
+def compute_drone_sector_cost(drone: dict, sector_id: str) -> float:
     """
     Cost metric for assigning this drone to this sector.
     Cost = distance / battery  (lower is better — fast + full beats slow + empty).
@@ -105,85 +100,6 @@ def estimate_signal(x: int, y: int, base_x: int = 0, base_y: int = 0, max_range:
     return max(0.0, round(100.0 * (1.0 - dist / max_range), 1))
 
 
-# ── Sector Assignment (The Drone's Local Brain) ──────────────────
-
-def assign_sectors_to_drones(
-    drones: List[dict],
-    search_grid: Dict[str, dict],
-    priority_map: Dict[str, dict],
-) -> Tuple[Dict[str, str], List[str]]:
-    """
-    Greedy O(S·D) sector assignment using Pythagorean cost (distance / battery).
-
-    Algorithm:
-      1. Collect all unclaimed, unscanned sectors with priority > 0.
-      2. Sort by priority descending (highest pheromone first).
-      3. For each sector, find the cheapest idle drone (min cost = dist / battery).
-      4. Assign and remove both from available pools.
-
-    Returns: ({drone_id: sector_id}, [skipped_log_messages])
-
-    This is THE core of the swarm's autonomy — no LLM involved.
-    """
-    # Eligible sectors: unclaimed, unscanned, pheromone present
-    available_sectors = [
-        (sid, cell)
-        for sid, cell in search_grid.items()
-        if cell.get("priority", 0.0) > 0.0
-        and not cell.get("claimed_by")
-        and not cell.get("scanned")
-    ]
-    # High-priority sectors (strong pheromone) get assigned first
-    available_sectors.sort(key=lambda sc: sc[1]["priority"], reverse=True)
-
-    # Eligible drones: idle, not locked, not carrying a payload, enough battery
-    idle_drones = [
-        d for d in drones
-        if d.get("status") == "idle"
-        and not d.get("locked")
-        and not d.get("payload")
-        and d.get("battery", 0) > BATTERY_RESERVE_MIN
-    ]
-
-    assignments: Dict[str, str] = {} # {"drone_id": "sector_id"}
-    taken_drones: set = set()
-    skipped_logs: List[str] = []
-
-    for sector_id, _cell in available_sectors:
-        remaining = [d for d in idle_drones if d["id"] not in taken_drones]
-        if not remaining:
-            break
-
-        # The drone that can reach this sector most cheaply wins the claim
-        best_drone = min(remaining, key=lambda d: _compute_drone_sector_cost(d, sector_id))
-        
-        # ── Dynamic Relay Check ──
-        data = priority_map.get(sector_id, {})
-        sx, sy = data.get("x", 0), data.get("y", 0)
-        from .mcp.client import mcp_client
-        dist_to_base = get_distance(sx, sy, mcp_client.base_x, mcp_client.base_y)
-        
-        if dist_to_base > 10:
-            # We NEED a relay because the sector is too far from the base station signal.
-            # Can we find one among the remaining drones? (Excluding the best_drone itself)
-            relay_pool = [d for d in remaining if d["id"] not in taken_drones and d["id"] != best_drone["id"]]
-            if relay_pool:
-                # SUCCESS: Reserve both main drone and relay
-                relay_candidate = min(relay_pool, key=lambda d: d.get("battery", 100))
-                
-                assignments[best_drone["id"]] = sector_id
-                taken_drones.add(best_drone["id"])
-                taken_drones.add(relay_candidate["id"])
-            else:
-                # FAILURE: No relay available.
-                skipped_logs.append(f"Sector '{sector_id}' skipped — requires a Mesh Relay but none are idle.")
-                continue
-        else:
-            # Short trip: No relay needed.
-            assignments[best_drone["id"]] = sector_id
-            taken_drones.add(best_drone["id"])
-
-    return assignments, skipped_logs
 
 
 # ── Strategist Context Builder ────────────────────────────────────────────────

@@ -12,67 +12,6 @@ Annotated reducers so concurrent state updates merge correctly.
 from typing import TypedDict, List, Dict, Any, Optional, Annotated
 from pydantic import BaseModel, Field
 
-
-# ── Structured LLM Output Models ──────────────────────────────────────────────
-
-class RescueDirective(BaseModel):
-    """High-level rescue assignment issued by the Strategist in rescue phase."""
-    drone_id: str = Field(
-        description="The ID of the drone to assign this rescue mission to"
-    )
-    survivor_id: str = Field(description="The survivor ID to rescue")
-    supply_type: str = Field(
-        description=(
-            "Supply type matched to condition: "
-            "medical_kit (critical), water (moderate/stable), food (stable)"
-        )
-    )
-
-
-class StrategyOutput(BaseModel):
-    """
-    Complete structured output from the Strategist LLM.
-    In SEARCH phase: outputs priority_updates only.
-    In RESCUE phase: outputs rescue_directive only.
-    """
-    thought: str = Field(
-        description=(
-            "Concise strategic reasoning — what environmental signals led to this decision? "
-            "Do NOT mention drone names in search phase."
-        )
-    )
-    priority_updates: Dict[str, float] = Field(
-        description=(
-            "SEARCH PHASE ONLY. Map of sector_id → priority float (0.0–10.0). "
-            "Higher = more urgent. 0.0 = deprioritize/ignore. "
-            "Only update sectors that are NOT yet scanned."
-        ),
-        default_factory=dict,
-    )
-    rescue_directive: Optional[RescueDirective] = Field(
-        description=(
-            "RESCUE PHASE ONLY. Assign one available drone to rescue one pending survivor. "
-            "Select the closest idle drone to the most critical survivor."
-        ),
-        default=None,
-    )
-
-
-# ── Grid Cell (Digital Pheromone) ─────────────────────────────────────────────
-
-class GridCell(TypedDict):
-    """
-    One sector on the shared pheromone map.
-    - priority:   Written by Strategist. Drones swarm toward high-priority unclaimed cells.
-    - claimed_by: Written by the Drone Agent before it begins flying. Prevents two drones
-                  racing to the same sector.
-    - scanned:    Set to True after thermal_scan completes. Permanent — never unset.
-    """
-    priority: float
-    claimed_by: Optional[str]
-    scanned: bool
-
-
 # ── LangGraph Reducers ────────────────────────────────────────────────────────
 # These are called automatically by LangGraph to merge state updates from
 # parallel drone_agent_node executions.
@@ -137,7 +76,76 @@ def _merge_signal_map(old: Dict[str, float], new: Dict[str, float]) -> Dict[str,
     return {**old, **new}
 
 
+def _merge_bids(old: List[Dict], new: Optional[List[Dict]]) -> List[Dict]:
+    """Merge bids from parallel drone bidding nodes, or clear if new is None."""
+    if new is None:
+        return []
+    return old + new
+
+
+# ── Structured LLM Output Models ──────────────────────────────────────────────
+
+class RescueDirective(BaseModel):
+    """High-level rescue assignment issued by the Strategist in rescue phase."""
+    drone_id: str = Field(
+        description="The ID of the drone to assign this rescue mission to"
+    )
+    survivor_id: str = Field(description="The survivor ID to rescue")
+    supply_type: str = Field(
+        description=(
+            "Supply type matched to condition: "
+            "medical_kit (critical), water (moderate/stable), food (stable)"
+        )
+    )
+
+
+class StrategyOutput(BaseModel):
+    """
+    Complete structured output from the Strategist LLM.
+    In SEARCH phase: outputs priority_updates only.
+    In RESCUE phase: outputs rescue_directive only.
+    """
+    thought: str = Field(
+        description=(
+            "Concise strategic reasoning — what environmental signals led to this decision? "
+            "Do NOT mention drone names in search phase."
+        )
+    )
+    priority_updates: Dict[str, float] = Field(
+        description=(
+            "SEARCH PHASE ONLY. Map of sector_id → priority float (0.0–10.0). "
+            "Higher = more urgent. 0.0 = deprioritize/ignore. "
+            "Only update sectors that are NOT yet scanned."
+        ),
+        default_factory=dict,
+    )
+    rescue_directive: Optional[RescueDirective] = Field(
+        description=(
+            "RESCUE PHASE ONLY. Assign one available drone to rescue one pending survivor. "
+            "Select the closest idle drone to the most critical survivor."
+        ),
+        default=None,
+    )
+
 # ── Core State Types ───────────────────────────────────────────────────────────
+class GridCell(TypedDict):
+    """
+    One sector on the shared pheromone map.
+    - priority:   Written by Strategist. Drones swarm toward high-priority unclaimed cells.
+    - claimed_by: Written by the Drone Agent before it begins flying. Prevents two drones
+                  racing to the same sector.
+    - scanned:    Set to True after thermal_scan completes. Permanent — never unset.
+    """
+    priority: float
+    claimed_by: Optional[str]
+    scanned: bool
+
+class Bid(TypedDict):
+    """A drone's task claim submitted during the bidding phase."""
+    drone_id: str
+    sector_id: str
+    cost: float
+
 
 class Drone(TypedDict):
     """Live telemetry snapshot for one physical drone."""
@@ -164,6 +172,10 @@ class SwarmState(TypedDict):
 
     # ── Event log (appended from all nodes) ───────────────────────────────────
     mission_log: Annotated[List[str], _merge_mission_log]
+
+    # ── Task Allocation Bids (merge + clear capabilities) ─────────────────────
+    bids: Annotated[List[Bid], _merge_bids]
+    _winning_bids: Optional[List[Bid]]
 
     # ── Pheromone map (smart merge — scanned is permanent) ────────────────────
     search_grid: Annotated[Dict[str, GridCell], _merge_search_grid]
