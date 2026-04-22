@@ -13,8 +13,8 @@ from fastapi import APIRouter, HTTPException
 from fastapi.responses import StreamingResponse
 from sse_starlette.sse import EventSourceResponse
 
-from api.models.mission import MissionRequest, MissionStarted, MissionStatus
-from api.mission_runner import runner
+from api.models.mission import MissionRequest, MissionStarted, MissionStatus, OperatorOverrideRequest
+from api.mission_runner import runner, _broadcast
 
 router = APIRouter(prefix="/mission", tags=["mission"])
 
@@ -113,3 +113,45 @@ async def stream_mission(mission_id: str):
 @router.get("/", summary="List all missions")
 async def list_missions():
     return {"missions": runner.list_all()}
+
+
+@router.post("/{mission_id}/override", status_code=200, )
+async def submit_operator_override(mission_id: str, req: OperatorOverrideRequest):
+    """
+    Human-in-the-loop operator override.
+
+    Submit a real-time field insight to redirect the swarm's pheromone map.
+    The insight is injected into SwarmState.human_override on the next governor
+    cycle, causing the Strategist LLM to immediately rebuild sector priorities.
+
+    Body: { "insight": "Big smoke visible near at (11, 1) — likely structural fire" }
+    """
+    state = runner.get(mission_id)
+    if not state:
+        raise HTTPException(status_code=404, detail=f"Mission {mission_id!r} not found")
+    if state.status != "running":
+        raise HTTPException(status_code=409, detail=f"Mission {mission_id!r} is not running (status: {state.status})")
+
+    insight = req.insight.strip()
+    if not insight:
+        raise HTTPException(status_code=422, detail="'insight' field is required and must not be empty")
+
+    # Ensure we import the EXACT SAME mcp_client singleton that the mission
+    # runner is using, otherwise we are writing to a disconnected instance.
+    import sys
+    import os
+    agent_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "agent"))
+    if agent_dir not in sys.path:
+        sys.path.append(agent_dir)
+
+    from agent.mcp.client import mcp_client
+    mcp_client.set_override(insight)
+
+    # Broadcast to all connected SSE clients so the frontend can show a confirmation
+    await _broadcast(state, {
+        "type":    "operator_override",
+        "insight": insight,
+        "message": f"🚨 Operator override submitted: \"{insight}\"",
+    })
+
+    return {"status": "accepted", "mission_id": mission_id, "insight": insight}

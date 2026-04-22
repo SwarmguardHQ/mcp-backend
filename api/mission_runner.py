@@ -147,6 +147,7 @@ class MissionRunner:
                 detected_survivors=[],
                 rescued_survivors=[],
                 phase="search",
+                human_override=None,
             )
 
             # ── 2. Sync Local World Tracking ────────────────────────────────────

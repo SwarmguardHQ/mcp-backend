@@ -39,6 +39,7 @@ from .utils import (
     compute_drone_sector_cost,
     estimate_signal,
     build_strategist_context,
+    add_dynamic_sector,
 )
 from utils.config import (
     BATTERY_COST_PER_CELL,
@@ -63,6 +64,52 @@ async def safety_governor_node(state: SwarmState) -> dict:
     Returns only state diffs; does not touch the LLM.
     """
     updates: dict = {"mission_log": []}
+
+    # ── 0. Consume any pending human-in-the-loop override ─────────────────────
+    # The API endpoint writes to mcp_client.pending_override.
+    # We pop it here (one-shot) and push it into SwarmState so the Strategist
+    # LLM sees it prominently on the very next cycle and rebuilds pheromones.
+    override = mcp_client.consume_override()
+    override_received_this_tick = False
+    if override:
+        override_received_this_tick = True
+        updates["human_override"] = override
+        updates["phase"] = "search"
+
+        # ── Dynamic Sector Injection ─────────────────────────────────────────
+        # If the operator mentioned coordinates like (11, 1), we extract them
+        # in Python, spawn a new sector_dynamic_N on the live
+        # PRIORITY_MAP, and seed it directly into search_grid at max pheromone
+        # (10.0). The dispatch router picks it up THIS SAME cycle.
+        import re
+        coord_match = re.search(r'\(?\b(\d+)\s*,\s*(\d+)\b\)?', override)
+        if coord_match:
+            try:
+                hx, hy = int(coord_match.group(1)), int(coord_match.group(2))
+                new_sector_id = add_dynamic_sector(hx, hy, label="Operator-Reported")
+                updates["search_grid"] = {
+                    new_sector_id: {
+                        "priority":   10.0,   # Max pheromone — dispatch immediately
+                        "claimed_by": None,
+                        "scanned":    False,
+                    }
+                }
+                updates["mission_log"].append(
+                    f"[GOVERNOR] 🚨 OPERATOR OVERRIDE RECEIVED: \"{override}\" — "
+                    f"Spawning {new_sector_id} at ({hx}, {hy}) with pheromone 10.0. "
+                    f"Swarm reverting to SEARCH phase."
+                )
+            except Exception as e:
+                updates["mission_log"].append(
+                    f"[GOVERNOR] 🚨 OPERATOR OVERRIDE RECEIVED: \"{override}\" — "
+                    f"No coordinates detected. Swarm reverting to SEARCH phase so Strategist can rebuild pheromones. ({e})"
+                )
+        else:
+            # No coordinates — let the Strategist LLM interpret the insight naturally
+            updates["mission_log"].append(
+                f"[GOVERNOR] 🚨 OPERATOR OVERRIDE RECEIVED: \"{override}\" — "
+                f"No coordinates detected. Swarm reverting to SEARCH phase so Strategist can rebuild pheromones."
+            )
 
     # ── 1. Sync all drone telemetry from MCP ground truth ─────────────────────
     try:
@@ -118,19 +165,19 @@ async def safety_governor_node(state: SwarmState) -> dict:
                 updates["mission_log"].append(f"[GOVERNOR] Return command failed for {drone['id']}: {e}")
 
     # ── 4. Phase state machine ─────────────────────────────────────────────────
-    search_grid  = state["search_grid"]
-    all_scanned  = all(cell.get("scanned") for cell in search_grid.values())
+    merged_grid  = {**state["search_grid"], **updates.get("search_grid", {})}
+    all_scanned  = all(cell.get("scanned") for cell in merged_grid.values())
     detected     = state.get("detected_survivors", [])
     rescued_set  = set(state.get("rescued_survivors", []))
     pending      = [s for s in detected if s.get("id") not in rescued_set]
 
-    current_phase = state.get("phase", "search")
+    current_phase = updates.get("phase", state.get("phase", "search"))
 
-    if current_phase == "search" and all_scanned:
+    if current_phase == "search" and all_scanned and not override_received_this_tick:
         if pending:
             updates["phase"] = "rescue"
             updates["mission_log"].append(
-                f"[GOVERNOR] 🔄 All {len(search_grid)} sectors scanned. "
+                f"[GOVERNOR] 🔄 All {len(merged_grid)} sectors scanned. "
                 f"Transitioning → RESCUE phase. {len(pending)} survivor(s) pending."
             )
         else:
@@ -171,6 +218,8 @@ async def strategist_node(state: SwarmState) -> dict:
     SEARCH PHASE:
       Reads scan results → outputs priority_updates to search_grid.
       Does NOT name drones. Does NOT issue move commands.
+      If human_override is set in state, it is shown as a high-priority banner
+      so the LLM immediately rebuilds pheromones around the operator insight.
 
     RESCUE PHASE:
       Matches closest drone to most critical survivor → outputs rescue_directive.
@@ -202,19 +251,31 @@ async def strategist_node(state: SwarmState) -> dict:
     phase = state.get("phase", "search")
 
     if phase == "search":
-        # Apply pheromone updates — locked to un-scanned sectors only
+        # Apply pheromone updates
         grid_updates: dict = {}
+        human_override = state.get("human_override")
         for sector_id, new_priority in response.priority_updates.items():
             existing = state["search_grid"].get(sector_id)
-            if existing and not existing.get("scanned"):
-                grid_updates[sector_id] = {
-                    **existing,
-                    "priority": max(0.0, float(new_priority)),
-                }
+            if existing:
+                if existing.get("scanned"):
+                    if human_override and float(new_priority) > 0.0:
+                        # Allow un-scanning during human override
+                        grid_updates[sector_id] = {
+                            **existing,
+                            "priority": float(new_priority),
+                            "scanned": False,
+                            "claimed_by": None
+                        }
+                else:
+                    grid_updates[sector_id] = {
+                        **existing,
+                        "priority": max(0.0, float(new_priority)),
+                    }
         if grid_updates:
             updates["search_grid"] = grid_updates
             summary = {s: f"{c['priority']:.1f}" for s, c in grid_updates.items()}
-            updates["mission_log"].append(f"[STRATEGIST] 📡 Pheromone update: {summary}")
+            label = "🚨 OVERRIDE-DRIVEN " if state.get("human_override") else ""
+            updates["mission_log"].append(f"[STRATEGIST] 📡 {label}Pheromone update: {summary}")
 
     elif phase == "rescue":
         if response.rescue_directive:
@@ -226,6 +287,11 @@ async def strategist_node(state: SwarmState) -> dict:
             )
         else:
             updates["mission_log"].append("[STRATEGIST] ⚠️  No rescue directive issued — looping.")
+
+    # One-shot: clear the override now that the Strategist has acted on it
+    if state.get("human_override"):
+        updates["human_override"] = None
+        updates["mission_log"].append("[STRATEGIST] ✅ Override consumed — pheromone map rebuilt.")
 
     return updates
 

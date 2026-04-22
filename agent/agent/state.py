@@ -20,7 +20,8 @@ def _merge_search_grid(old: Dict[str, Any], new: Dict[str, Any]) -> Dict[str, An
     """
     Smart merge for the pheromone grid.
     Rules:
-      - scanned=True is permanent and can never be reverted.
+      - scanned=True is normally permanent.
+      - A scanned cell can be un-scanned if cell explicitly sets scanned=False (used by Strategist on operator override).
       - A scanned cell can still have its claimed_by released (set to None).
       - Un-scanned cells use the new value entirely.
     """
@@ -31,10 +32,12 @@ def _merge_search_grid(old: Dict[str, Any], new: Dict[str, Any]) -> Dict[str, An
             continue
         existing = merged[sector]
         if existing.get("scanned"):
-            # Permanent scan — only allow releasing a stale claim
-            if cell.get("claimed_by") is None and existing.get("claimed_by") is not None:
+            if cell.get("scanned") is False: # Pheremone's search grid (search grid that updated by strategist - latest)
+                # Explicit un-scan requested (e.g. by Strategist during human override)
+                merged[sector] = cell
+            elif cell.get("claimed_by") is None and existing.get("claimed_by") is not None:
+                # Permanent scan — only allow releasing a stale claim
                 merged[sector] = {**existing, "claimed_by": None}
-            # Block any attempt to un-scan or reprioritize a completed sector
         else:
             merged[sector] = cell
     return merged
@@ -197,3 +200,11 @@ class SwarmState(TypedDict):
     detected_survivors: List[Dict[str, Any]]     # pending survivors (ground-truth from MCP)
     rescued_survivors: List[str]                  # rescued survivor IDs (ground-truth from MCP)
     phase: str                                    # "search" | "rescue" | "complete"
+
+    # ── Human-in-the-loop override ────────────────────────────────────────────
+    # Operator-submitted real-time insight (e.g. "big smoke seen near sector 6").
+    # Set by safety_governor_node from mcp_client.pending_override.
+    # Consumed (one-shot) by strategist_node — shown prominently in the LLM
+    # context as a high-priority signal that overrides pheromone priorities.
+    # Cleared to None after the Strategist acts on it.
+    human_override: Optional[str]
