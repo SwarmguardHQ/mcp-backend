@@ -1,25 +1,38 @@
 """
-Default Scenario
-Objective: acts as a generic fallback if no specific scenario is provided. Also for Swarm Dashboard if no scenario selected
+Scenario: ACO Swarm Deployment
+Objective: Demonstrate Ant Colony Optimization (pheromone-guided search) and 
+dynamic mesh networking under heavy battery constraints across a wide grid.
 """
 
 MISSION_PROMPT = """\
-SIREN, generic search and rescue mission initiated.
-Proceed with standard operating procedures.
+Save all survivors in the area. 
+
+Note: This is a massive, multi-sector long-distance search.
+You will need to heavily rely on your Pheromone Grid logic to guide the swarm efficiently.
+Relays will be crucial for the distant infrastructure.
+Watch the deadlock breaker if drones run low on fuel!
 """
 
 INITIAL_FLEET = [
-    {"id": "DRONE_ALPHA",   "x": 0, "y": 0, "battery": 95},
-    {"id": "DRONE_BRAVO",   "x": 9, "y": 0, "battery": 80},
-    {"id": "DRONE_CHARLIE", "x": 0, "y": 9, "battery": 70},
-    {"id": "DRONE_DELTA",   "x": 9, "y": 9, "battery": 60},
-    {"id": "DRONE_ECHO",    "x": 5, "y": 0, "battery": 100, "offline": True},
+    {"id": "DRONE_ALPHA",   "x": 0, "y": 0, "battery": 90, "status": "idle"},
+    {"id": "DRONE_BRAVO",   "x": 0, "y": 0, "battery": 75, "status": "idle"},
+    {"id": "DRONE_CHARLIE", "x": 0, "y": 0, "battery": 60, "status": "idle"},
+    {"id": "DRONE_DELTA",   "x": 0, "y": 0, "battery": 85, "status": "idle"},
+    {"id": "DRONE_ECHO",    "x": 0, "y": 0, "battery": 100, "status": "idle"},
 ]
 
 INITIAL_SURVIVORS = [
-    {"id": "S1", "x": 3, "y": 7, "condition": "critical"},
-    {"id": "S2", "x": 8, "y": 2, "condition": "stable"},
-    {"id": "S3", "x": 5, "y": 5, "condition": "critical"},
-    {"id": "S4", "x": 1, "y": 9, "condition": "moderate"},
-    {"id": "S5", "x": 7, "y": 8, "condition": "stable"},
+    # Far deep zones (Requires mesh relay and heavy battery burn)
+    {"id": "S1", "x": 12, "y": 13, "condition": "critical"},
+    # {"id": "S2", "x": 13, "y": 12, "condition": "moderate"},
+    {"id": "S3", "x": 2, "y": 16, "condition": "stable"},
+    
+    # Mid ranges
+    # {"id": "S4", "x": 5, "y": 1, "condition": "critical"},
+    {"id": "S5", "x": 2, "y": 9, "condition": "moderate"},
+    {"id": "S6", "x": 14, "y": 5, "condition": "stable"},
+    
+    # Close
+    {"id": "S7", "x": 7, "y": 7, "condition": "stable"},
+    {"id": "S8", "x": 15, "y": 10, "condition": "critical"},
 ]
