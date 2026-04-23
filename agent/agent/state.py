@@ -159,6 +159,7 @@ class Drone(TypedDict):
     status: str
     locked: bool
     payload: Optional[str]
+    assigned_sector: Optional[str]   
 
 
 class SwarmState(TypedDict):
