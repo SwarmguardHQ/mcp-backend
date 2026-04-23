@@ -521,7 +521,7 @@ async def resolve_bids_node(state: SwarmState) -> dict:
 
     The actual flight execution is handled by dispatch_winners → drone_agent_node.
     """
-    updates: dict = {"mission_log": [], "search_grid": {}, "bids": None, "_winning_bids": []}  # None clears via reducer
+    updates: dict = {"mission_log": [], "search_grid": {}, "bids": None, "_winning_bids": [], "drones": []}  # None clears via reducer
 
     all_bids: list = state.get("bids", [])
     if not all_bids:
@@ -570,6 +570,23 @@ async def resolve_bids_node(state: SwarmState) -> dict:
         updates["mission_log"].append(
             f"[RESOLVE] ✅ '{sector_id}' awarded to {winner['drone_id']} (cost={winner['cost']:.2f})"
         )
+        
+        # Update drone assigned sector
+        for drone in state["drones"]:
+            if drone["id"] == winner["drone_id"]:
+                updated_drone = {**drone, "assigned_sector": sector_id}
+                updates["drones"].append(updated_drone)
+                
+                try:
+                    await mcp_client.session.call_tool("assign_sector", {
+                        "drone_id": drone["id"],
+                        "sector_label": sector_id
+                    })
+                except Exception:
+                    updates["mission_log"].append(
+                        f"[{winner['drone_id']}] ⛔ Failed to assign sector {sector_id}."
+                    )
+                break
 
     # Store winning assignments for dispatch_winners to read
     updates["_winning_bids"] = winning_bids
@@ -674,6 +691,10 @@ async def drone_agent_node(state: dict) -> dict:
             await mcp_client.session.call_tool(
                 "return_to_charging_station", {"drone_id": drone_id}
             )
+            await mcp_client.session.call_tool("assign_sector", {
+                "drone_id": drone_id,
+                "sector_label": "" 
+            })
         except Exception:
             pass
         return updates
@@ -890,6 +911,13 @@ async def drone_agent_node(state: dict) -> dict:
                 **state["search_grid"].get(target_sector, {}),
                 "claimed_by": None,
             }
+            try:
+                await mcp_client.session.call_tool("assign_sector", {
+                    "drone_id": drone_id,
+                    "sector_label": "" 
+                })
+            except Exception:
+                pass
             return updates
     except Exception as e:
         updates["mission_log"].append(f"[{drone_id}] ❌ Move exception: {e}. Releasing claim.")
@@ -897,6 +925,13 @@ async def drone_agent_node(state: dict) -> dict:
             **state["search_grid"].get(target_sector, {}),
             "claimed_by": None,
         }
+        try:
+            await mcp_client.session.call_tool("assign_sector", {
+                "drone_id": drone_id,
+                "sector_label": "" 
+            })
+        except Exception:
+            pass
         return updates
 
     # ── STEP 5: THERMAL SCAN ──────────────────────────────────────────────────
@@ -950,6 +985,7 @@ async def drone_agent_node(state: dict) -> dict:
                 "status":  sync_data.get("status", drone["status"]),
                 "payload": sync_data.get("payload", drone.get("payload")),
                 "locked":  sync_data.get("locked", drone.get("locked", False)),
+                "assigned_sector": sync_data.get("assigned_sector", drone.get("assigned_sector")),
             }
             updates["drones"].append(updated_drone)
             updates["mission_log"].append(
