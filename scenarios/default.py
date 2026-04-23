@@ -5,7 +5,7 @@ dynamic mesh networking under heavy battery constraints across a wide grid.
 """
 
 MISSION_PROMPT = """\
-Save all survivors in the area. 
+An earthquake happens. Someone reported the sound seems come from school area.
 
 Note: This is a massive, multi-sector long-distance search.
 You will need to heavily rely on your Pheromone Grid logic to guide the swarm efficiently.
