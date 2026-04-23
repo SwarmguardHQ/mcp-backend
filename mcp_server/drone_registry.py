@@ -58,8 +58,9 @@ def lock_drone(drone_id: str) -> dict:
     if not drone:
         return {"error": f"Drone {drone_id} not found"}
     drone.locked = True
+    drone.status = DroneStatus.RELAY
     drone.log("Drone LOCKED by command.")
-    return {"drone_id": drone_id, "locked": True}
+    return {"drone_id": drone_id, "locked": True, "status": drone.status.value}
 
 
 def unlock_drone(drone_id: str) -> dict:
@@ -68,5 +69,7 @@ def unlock_drone(drone_id: str) -> dict:
     if not drone:
         return {"error": f"Drone {drone_id} not found"}
     drone.locked = False
+    if drone.status == DroneStatus.RELAY:
+        drone.status = DroneStatus.IDLE
     drone.log("Drone UNLOCKED by command.")
-    return {"drone_id": drone_id, "locked": False}
+    return {"drone_id": drone_id, "locked": False, "status": drone.status.value}
