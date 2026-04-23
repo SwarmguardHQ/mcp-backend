@@ -61,8 +61,8 @@ class Drone:
             self._idle_timer.cancel()
             
         def _to_idle():
-            # Don't switch if offline, charging or already idle
-            if self.status not in (DroneStatus.OFFLINE, DroneStatus.CHARGING, DroneStatus.IDLE):
+            # Don't switch if offline, charging, relaying, or already idle
+            if self.status not in (DroneStatus.OFFLINE, DroneStatus.CHARGING, DroneStatus.RELAY, DroneStatus.IDLE):
                 self.status = DroneStatus.IDLE
                 self.log("Task completed — auto-switched to IDLE")
                 try:
