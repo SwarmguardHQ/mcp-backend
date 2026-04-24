@@ -5,7 +5,7 @@ dynamic mesh networking under heavy battery constraints across a wide grid.
 """
 
 MISSION_PROMPT = """\
-An earthquake happens. Someone reported the sound seems come from school area.
+An earthquake happens. Someone reported the sound start and come from sector 2.
 
 Note: This is a massive, multi-sector long-distance search.
 You will need to heavily rely on your Pheromone Grid logic to guide the swarm efficiently.
