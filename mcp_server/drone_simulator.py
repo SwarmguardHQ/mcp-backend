@@ -93,7 +93,7 @@ class Drone:
         self.battery = max(0, self.battery - cost)
         self.status = DroneStatus.SCANNING
         self.log(f"Scan at ({self.x},{self.y}), battery={self.battery}%")
-        self._schedule_idle(5.0)
+        self._schedule_idle(10.0)
 
     def start_charging(self, station_id: str) -> None:
         if self._idle_timer:
